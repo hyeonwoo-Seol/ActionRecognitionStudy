@@ -1,7 +1,8 @@
 # 실험
 
 # 실험1. Shift-GCN + Transformer
-`
+
+```
 self.pose_encoder = nn.Sequential(
    nn.Linear(num_joints * 3, 128),
    nn.GELU(),
@@ -26,7 +27,7 @@ self.fusion_layer = nn.Sequential(
 
 self.dropout = nn.Dropout(p=0.7)
 self.fc = nn.Linear(128, num_classes)
-`
+```
 
 ## 사용한 config.py 설정값
 
@@ -102,7 +103,7 @@ ETA_MIN = 1e-6 # 최소 학습률
 이를 통해 모든 특징이 비슷한 범위의 값을 가지게 되어 모델의 학습 안정성과 수렴 속도를 향상시킵니다.
 
 # 실험2 Shift-GCN + Mamba
-`
+```
 self.pose_encoder = nn.Sequential(
     nn.Linear(num_joints * 3, 128),
     nn.GELU(),
@@ -124,7 +125,7 @@ self.fusion_layer = nn.Sequential(
 
 self.dropout = nn.Dropout(p=0.7)
 self.fc = nn.Linear(128, num_classes)
-`
+```
 
 ## 사용한 config 설정값
 
