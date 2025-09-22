@@ -1,11 +1,12 @@
 # model.py
-# Shift-GCN + Mamba
+# Shift-GCN + Transformer
 
 import torch
 import torch.nn as nn
 from mamba_ssm import Mamba
 import numpy as np
 import config
+import math
 
 class RMSNorm(nn.Module):
     def __init__(self, d, eps=1e-6):
@@ -140,7 +141,7 @@ class PositionalEncoding(nn.Module):
         """
         x: (N, T, C) 형태의 텐서에 위치 정보를 더해줍니다.
         """
-        x = x + self.pe[:, :x.size(1), :]
+        x = x + self.pe[:, :x.size(1), :].unsqueeze(2)
         return self.dropout(x)
 
 class ST_Transformer_Block(nn.Module):
@@ -206,14 +207,16 @@ class GCNTransformerModel(nn.Module):
             nn.Linear(128, 128)
         )
 
+        self.input_projection = nn.Linear(num_coords, 64)
+
         # PositionalEncoding 인스턴스 생성
         self.pos_encoder_64 = PositionalEncoding(d_model=64)
         self.pos_encoder_128 = PositionalEncoding(d_model=128)
         
         # ST_Transformer_Block 사용
         self.blocks = nn.ModuleList([
-            ST_Transformer_Block(in_features=num_coords, out_features=64, num_joints=num_joints),
-            ST_Transformer_Block(in_features=64, out_features=128, num_joints=num_joints),
+            ST_Transformer_Block(in_features = 64, out_features = 64, num_joints = num_joints),
+            ST_Transformer_Block(in_features = 64, out_features = 128, num_joints = num_joints),
         ])
 
         self.attention_pool = AttentionPooling(d_model=128)
@@ -234,14 +237,16 @@ class GCNTransformerModel(nn.Module):
         
         x = motion_features.permute(0, 2, 3, 1).contiguous()
 
-        # 각 블록을 통과시키기 전에 위치 인코딩을 적용합니다.
-        # 첫 번째 블록은 채널 수가 64, 두 번째는 128이므로 각각에 맞는
-        # PositionalEncoding을 적용해야 합니다.
-        x_pos_64 = self.pos_encoder_64(x)
-        x = self.blocks[0](x_pos_64)
+        # 먼저 채널 수를 7에서 64로 확장
+        x = self.input_projection(x)
 
-        x_pos_128 = self.pos_encoder_128(x)
-        x = self.blocks[1](x_pos_128)
+        # 64차원이 된 후에 위치 인코딩 적용
+        x = self.pos_encoder_64(x)
+        x = self.blocks[0](x) # 첫 번째 블록 (64 -> 64)
+        
+        # 두 번째 블록을 통과시켜 128차원으로 만든 후, 위치 인코딩 적용
+        x = self.blocks[1](x) # 두 번째 블록 (64 -> 128)
+        x = self.pos_encoder_128(x) # 128차원이 된 후에 위치 인코딩 적용
 
         motion_summary = self.attention_pool(x)
         combined_summary = torch.cat([motion_summary, pose_vector], dim=-1)
