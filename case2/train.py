@@ -209,7 +209,7 @@ def main():
     checkpoint_path = os.path.join(config.SAVE_DIR, "best_model.pth.tar")
 
     # 조기 종료 변수 추가
-    patience = 5
+    patience = 10
     patience_counter = 0
 
     history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}

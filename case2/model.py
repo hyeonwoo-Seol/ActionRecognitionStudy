@@ -1,5 +1,5 @@
 # model.py
-# Shift-GCN + Transformer
+# Shift-GCN + Transformer 3layer
 
 import torch
 import torch.nn as nn
@@ -208,9 +208,9 @@ class GCNTransformerModel(nn.Module):
         )
 
         self.input_projection = nn.Linear(num_coords, 64)
-
         # PositionalEncoding 인스턴스 생성
         self.pos_encoder_64 = PositionalEncoding(d_model=64)
+        self.pos_encoder_128 = PositionalEncoding(d_model=128)
         
         # ST_Transformer_Block 사용
         self.blocks = nn.ModuleList([
@@ -248,6 +248,8 @@ class GCNTransformerModel(nn.Module):
         x = self.blocks[1](x) # 두 번째 블록 (64 -> 128)
         x = self.pos_encoder_128(x) # 128차원이 된 후에 위치 인코딩 적용
 
+        x = self.blocks[2](x)
+        
         motion_summary = self.attention_pool(x)
         combined_summary = torch.cat([motion_summary, pose_vector], dim=-1)
         
