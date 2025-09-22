@@ -204,25 +204,25 @@ class GCNTransformerModel(nn.Module):
         self.pose_encoder = nn.Sequential(
             nn.Linear(num_joints * 3, 128),
             nn.GELU(),
-            nn.Linear(128, 128)
+            nn.Linear(128, 256)
         )
 
         self.input_projection = nn.Linear(num_coords, 64)
 
         # PositionalEncoding 인스턴스 생성
         self.pos_encoder_64 = PositionalEncoding(d_model=64)
-        self.pos_encoder_128 = PositionalEncoding(d_model=128)
         
         # ST_Transformer_Block 사용
         self.blocks = nn.ModuleList([
             ST_Transformer_Block(in_features = 64, out_features = 64, num_joints = num_joints),
             ST_Transformer_Block(in_features = 64, out_features = 128, num_joints = num_joints),
+            ST_Transformer_Block(in_features = 128, out_features = 256, num_joints = num_joints)
         ])
 
-        self.attention_pool = AttentionPooling(d_model=128)
+        self.attention_pool = AttentionPooling(d_model=256)
         
         self.fusion_layer = nn.Sequential(
-            nn.Linear(128 * 2, 128),
+            nn.Linear(256 * 2, 128),
             nn.GELU(),
             RMSNorm(128)
         )

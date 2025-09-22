@@ -104,7 +104,40 @@ ETA_MIN = 1e-6 # 최소 학습률
 
 이를 통해 모든 특징이 비슷한 범위의 값을 가지게 되어 모델의 학습 안정성과 수렴 속도를 향상시킵니다.
 
-# 실험2 Shift-GCN + Mamba
+## 실험1 결과
+
+Best Validation Accuracy achieved: 0.5991 (59.91%)
+
+![result1](image/Study1.png)
+
+# 실험 2
+
+실험 1에서 모델의 복잡도를 늘렸다.
+
+```
+self.pose_encoder = nn.Sequential(
+     nn.Linear(num_joints * 3, 128),
+     nn.GELU(),
+     nn.Linear(128, 256)
+)
+self.blocks = nn.ModuleList([
+     ST_Transformer_Block(in_features = 64, out_features = 64, num_joints = num_joints),
+     ST_Transformer_Block(in_features = 64, out_features = 128, num_joints = num_joints),
+     ST_Transformer_Block(in_features = 128, out_features = 256, num_joints = num_joints)
+])
+
+self.fusion_layer = nn.Sequential(
+     nn.Linear(256 * 2, 128),
+     nn.GELU(),
+     RMSNorm(128)
+)
+```
+
+# 실험3
+
+실험 2에서 Dropout 비율을 0.7 -> 0.5로 낮추었다.
+
+# 실험n Shift-GCN + Mamba
 ```
 self.pose_encoder = nn.Sequential(
     nn.Linear(num_joints * 3, 128),
