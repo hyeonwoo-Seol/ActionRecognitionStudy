@@ -35,3 +35,6 @@ output/
 *.pem
 *.key
 secrets.yml
+*.py~
+*.txt~
+*.*~
