@@ -14,6 +14,52 @@ NUM_JOINTS = config.NUM_JOINTS
 BASE_NUM_JOINTS = 25
 TRAINING_SUBJECTS = [1, 2, 4, 5, 8, 9, 13, 14, 15, 16, 17, 18, 19, 25, 27, 28, 31, 34, 35, 38]
 
+def _apply_kalman_filter(coords):
+    """
+    3D 좌표 시계열 데이터에 칼만 필터를 적용하여 노이즈를 제거하고 움직임을 부드럽게 합니다.
+    입력 shape: (num_frames, 2, 25, 3)
+    출력 shape: (num_frames, 2, 25, 3)
+    """
+    num_frames, num_persons, num_joints, num_dims = coords.shape
+    filtered_coords = np.zeros_like(coords)
+
+    # 칼만 필터 파라미터 (상수 속도 모델)
+    dt = 1.0  # 시간 간격
+    F = np.array([[1, dt], [0, 1]])      # 상태 전이 행렬
+    H = np.array([[1, 0]])               # 관측 행렬
+    Q = np.eye(2) * 0.1                  # 프로세스 노이즈 공분산 (모델의 불확실성)
+    R = np.array([[10]])                 # 측정 노이즈 공분산 (센서의 불확실성)
+
+    for p in range(num_persons):
+        for j in range(num_joints):
+            for d in range(num_dims):
+                # 처리할 1D 시계열 데이터
+                measurements = coords[:, p, j, d]
+                
+                # 초기 상태 및 공분산
+                x = np.array([[measurements[0]], [0]])  # 초기 상태 [위치, 속도]
+                P = np.eye(2)                           # 초기 상태 공분산
+
+                filtered_positions = []
+
+                for z in measurements:
+                    # 예측 단계
+                    x_pred = F @ x
+                    P_pred = F @ P @ F.T + Q
+
+                    # 업데이트 단계
+                    y = z - H @ x_pred
+                    S = H @ P_pred @ H.T + R
+                    K = P_pred @ H.T @ np.linalg.inv(S)
+                    x = x_pred + K @ y
+                    P = (np.eye(2) - K @ H) @ P_pred
+                    
+                    filtered_positions.append(x[0, 0])
+                
+                filtered_coords[:, p, j, d] = filtered_positions
+                
+    return filtered_coords
+
 def _read_skeleton_file(file_path):
     with open(file_path, 'r') as f:
         lines = f.readlines()
@@ -52,7 +98,32 @@ def _read_skeleton_file(file_path):
                 
     return frame_data
 
+def _normalize_by_bone_length(coords):
+    """
+    척추 길이를 기준으로 3D 스켈레톤 좌표를 정규화합니다.
+    입력 shape: (num_frames, 2, 25, 3)
+    출력 shape: (num_frames, 2, 25, 3)
+    """
+    # 기준 관절 인덱스 정의
+    SPINE_SHOULDER_JOINT = 20
+    SPINE_BASE_JOINT = 0
+    
+    # 각 프레임, 각 사람(person)에 대해 기준 관절의 좌표를 선택합니다.
+    # shape: (num_frames, 2, 1, 3)
+    ref_joint1_coords = coords[:, :, SPINE_SHOULDER_JOINT:SPINE_SHOULDER_JOINT+1, :]
+    ref_joint2_coords = coords[:, :, SPINE_BASE_JOINT:SPINE_BASE_JOINT+1, :]
+    
+    # 척추 길이(유클리드 거리)를 계산합니다. 0으로 나누는 것을 방지하기 위해 작은 값(epsilon)을 더합니다.
+    # shape: (num_frames, 2, 1)
+    torso_lengths = np.linalg.norm(ref_joint1_coords - ref_joint2_coords, axis=-1) + 1e-8
 
+    # 브로드캐스팅을 위해 차원을 추가해줍니다. (num_frames, 2, 1) -> (num_frames, 2, 1, 1)
+    torso_lengths = np.expand_dims(torso_lengths, axis=-1)
+    
+    # 모든 관절 좌표를 해당 프레임의 척추 길이로 나눕니다.
+    normalized_coords = coords / torso_lengths
+    
+    return normalized_coords
 
 def _calculate_features(coords):
     center_joint = coords[:, :, 0:1, :]
@@ -95,8 +166,18 @@ def calculate_and_save_stats():
 
         if coords.shape[0] == 0: continue
 
-        coords = coords[::2, :, :]
-        features = _calculate_features(coords)
+        # 1. 칼만 필터 적용
+        smoothed_coords = _apply_kalman_filter(coords)
+        
+        # 2. 뼈 길이 정규화 적용
+        normalized_coords = _normalize_by_bone_length(smoothed_coords)
+
+        # 3. 다운샘플링
+        downsampled_coords = normalized_coords[::2, :, :]
+
+        # 4. 전처리된 좌표로 특징 계산
+        features = _calculate_features(downsampled_coords)
+        
         valid_frames = features.reshape(-1, features.shape[-1])
         valid_frames = valid_frames[np.abs(valid_frames).sum(axis=1) > 1e-6]
         if valid_frames.shape[0] > 0:
@@ -139,8 +220,18 @@ def main():
             first_frame_raw = coords[0, :, :, :]
             first_frame_coords = np.concatenate((first_frame_raw[0], first_frame_raw[1]), axis=0)
 
-            coords = coords[::2, :, :, :]
-            raw_features = _calculate_features(coords)
+            # 칼만 필터 적용
+            smoothed_coords = _apply_kalman_filter(coords)
+
+            # 뼈길이 정규화
+            normalized_coords = _normalize_by_bone_length(smoothed_coords)
+
+            # 다운샘플링
+            normalized_coords = normalized_coords[::2, :, :, :]
+
+            # 특징 계산
+            raw_features = _calculate_features(normalized_coords)
+            
             
             num_frames = raw_features.shape[0]
             if num_frames < MAX_FRAMES:

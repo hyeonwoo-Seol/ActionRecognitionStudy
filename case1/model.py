@@ -147,22 +147,27 @@ class PositionalEncoding(nn.Module):
 class ST_Transformer_Block(nn.Module):
     def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
         super().__init__()
+        # 1. 공간적 특징을 위한 Shift-GCN (기존과 동일)
         self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
         self.norm_gcn = RMSNorm(out_features)
-        
-        # 트랜스포머 인코더 레이어 정의
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=out_features, 
-            nhead=nhead, 
-            dim_feedforward=dim_feedforward,
-            activation='gelu',
-            batch_first=True,  # 입력 텐서 형식을 (Batch, Seq, Feature)로 지정
-            dropout=0.1
+
+        # 2. 공간적 어텐션을 위한 Transformer 인코더
+        spatial_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
+            activation='gelu', batch_first=True, dropout=0.1
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
-        self.norm_transformer = RMSNorm(out_features)
+        self.spatial_transformer_encoder = nn.TransformerEncoder(spatial_encoder_layer, num_layers=1)
+        self.norm_spatial = RMSNorm(out_features)
+
+        # 3. 시간적 어텐션을 위한 Transformer 인코더
+        temporal_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
+            activation='gelu', batch_first=True, dropout=0.1
+        )
+        self.temporal_transformer_encoder = nn.TransformerEncoder(temporal_encoder_layer, num_layers=1)
+        self.norm_temporal = RMSNorm(out_features)
         
-        # 입력과 출력의 채널 수가 다를 경우, 잔차 연결을 위해 차원을 맞춰줍니다.
+        # 입력과 출력의 채널 수가 다를 경우를 위한 잔차 연결
         if in_features != out_features:
             self.residual = nn.Sequential(
                 nn.Linear(in_features, out_features),
@@ -171,31 +176,42 @@ class ST_Transformer_Block(nn.Module):
         else:
             self.residual = nn.Identity()
 
-    def forward(self, x_with_pos):
-        # x_with_pos shape: (N, T, J, C)
-        x = x_with_pos # 위치 인코딩이 더해진 입력
-        N, T, J, C = x.shape
+    def forward(self, x):
+        # x shape: (N, T, J, C)
+        N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.gcn.weight.shape[-1]
         
-        res = self.residual(x)
+        res_main = self.residual(x)
         
-        # 1. Shift-GCN (공간적 특징 추출)
+        # --- 1. 공간 그래프 컨볼루션 ---
         x_gcn = self.gcn(x)
-        x_gcn_norm = self.norm_gcn(x_gcn)
-        
-        # 2. Transformer (시간적 특징 추출)
-        # 트랜스포머에 입력하기 위해 (N, T, J, C) -> (N*J, T, C) 형태로 변경
-        x_reshaped = x_gcn_norm.permute(0, 2, 1, 3).contiguous().view(N * J, T, -1)
-        x_transformer = self.transformer_encoder(x_reshaped)
-        x_transformer_norm = self.norm_transformer(x_transformer)
-        
-        # 3. 원래 형태로 복원 (N*J, T, C) -> (N, T, J, C)
-        x_out = x_transformer_norm.view(N, J, T, -1).permute(0, 2, 1, 3).contiguous()
-        
-        # 4. 잔차 연결
-        x_out = x_out + res
-        
-        return x_out
+        x_gcn = self.norm_gcn(x_gcn)
 
+        # --- 2. 공간 Transformer 어텐션 ---
+        # 각 프레임(T) 내에서 관절(J)들 간의 관계를 학습
+        # (N, T, J, C) -> (N*T, J, C) 형태로 변경하여 J를 시퀀스 길이로 취급
+        res_spatial = x_gcn
+        x_reshaped_spatial = x_gcn.contiguous().view(N * T, J, C_out)
+        x_spatial_attn = self.spatial_transformer_encoder(x_reshaped_spatial)
+        x_spatial_attn = self.norm_spatial(x_spatial_attn)
+        # 원래 형태로 복원: (N*T, J, C) -> (N, T, J, C)
+        x_spatial_out = x_spatial_attn.view(N, T, J, C_out)
+        x_spatial_out = x_spatial_out + res_spatial # 공간 내 잔차 연결
+
+        # --- 3. 시간 Transformer 어텐션 ---
+        # 각 관절(J)의 시간(T)적 흐름에 따른 관계를 학습
+        # (N, T, J, C) -> (N*J, T, C) 형태로 변경하여 T를 시퀀스 길이로 취급
+        res_temporal = x_spatial_out
+        x_reshaped_temporal = x_spatial_out.permute(0, 2, 1, 3).contiguous().view(N * J, T, C_out)
+        x_temporal_attn = self.temporal_transformer_encoder(x_reshaped_temporal)
+        x_temporal_attn = self.norm_temporal(x_temporal_attn)
+        # 원래 형태로 복원: (N*J, T, C) -> (N, T, J, C)
+        x_temporal_out = x_temporal_attn.view(N, J, T, C_out).permute(0, 2, 1, 3).contiguous()
+        x_temporal_out = x_temporal_out + res_temporal # 시간 내 잔차 연결
+        
+        # --- 4. 최종 잔차 연결 ---
+        x_final = x_temporal_out + res_main
+        
+        return x_final
 
 class GCNTransformerModel(nn.Module):
     def __init__(self, num_joints=50, num_coords=config.NUM_COORDS, num_classes=60):
@@ -246,7 +262,6 @@ class GCNTransformerModel(nn.Module):
         
         # 두 번째 블록을 통과시켜 128차원으로 만든 후, 위치 인코딩 적용
         x = self.blocks[1](x) # 두 번째 블록 (64 -> 128)
-        x = self.pos_encoder_128(x) # 128차원이 된 후에 위치 인코딩 적용
 
         # x = self.blocks[2](x)
         

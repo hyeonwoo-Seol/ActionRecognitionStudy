@@ -1,11 +1,12 @@
 # model.py
-# Shift-GCN + Mamba
+# Shift-GCN + Transformer 3layer
 
 import torch
 import torch.nn as nn
 from mamba_ssm import Mamba
 import numpy as np
 import config
+import math
 
 class RMSNorm(nn.Module):
     def __init__(self, d, eps=1e-6):
@@ -65,6 +66,33 @@ def get_ntu_shift_decompositions(num_joints):
     return torch.stack(decompositions)
 
 
+class AttentionPooling(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        # 입력 특징(d_model)을 받아 1개의 어텐션 점수로 변환하는 선형 레이어
+        self.attention_scorer = nn.Linear(d_model, 1)
+
+    def forward(self, x):
+        # x shape: (N, T, J, C)
+        N, T, J, C = x.shape
+
+        # 1. 어텐션 점수 계산을 위해 (N, T*J, C) 형태로 변경
+        x_reshaped = x.view(N, T * J, C)
+
+        # 2. 각 위치(T*J개)의 중요도를 계산
+        # (N, T*J, C) -> (N, T*J, 1)
+        attention_logits = self.attention_scorer(x_reshaped)
+
+        # 3. Softmax를 적용하여 합이 1인 어텐션 가중치 생성
+        # (N, T*J, 1)
+        attention_weights = torch.softmax(attention_logits, dim=1)
+
+        # 4. 가중치와 원래 특징을 곱하여 가중 합(weighted sum) 계산
+        # (N, T*J, C) * (N, T*J, 1) -> (N, T*J, C)
+        # .sum(dim=1)을 통해 (N, C) 형태의 최종 요약 벡터 생성
+        context_vector = (x_reshaped * attention_weights).sum(dim=1)
+
+        return context_vector
 
 class ShiftGraphConvolution(nn.Module):
     # Shift-GCN 레이어
@@ -96,17 +124,50 @@ class ShiftGraphConvolution(nn.Module):
         return output
 
 
-class ST_Mamba_Block(nn.Module):
-    # GCN과 Mamba를 하나로 묶고 잔차 연결을 포함한 블록
-    def __init__(self, in_features, out_features, num_joints):
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = config.MAX_FRAMES):
         super().__init__()
-        self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
+        self.dropout = nn.Dropout(p=dropout)
 
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        x: (N, T, C) 형태의 텐서에 위치 정보를 더해줍니다.
+        """
+        x = x + self.pe[:, :x.size(1), :].unsqueeze(2)
+        return self.dropout(x)
+
+class ST_Transformer_Block(nn.Module):
+    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
+        super().__init__()
+        # 1. 공간적 특징을 위한 Shift-GCN (기존과 동일)
+        self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
         self.norm_gcn = RMSNorm(out_features)
+
+        # 2. 공간적 어텐션을 위한 Transformer 인코더
+        spatial_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
+            activation='gelu', batch_first=True, dropout=0.1
+        )
+        self.spatial_transformer_encoder = nn.TransformerEncoder(spatial_encoder_layer, num_layers=1)
+        self.norm_spatial = RMSNorm(out_features)
+
+        # 3. 시간적 어텐션을 위한 Transformer 인코더
+        temporal_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
+            activation='gelu', batch_first=True, dropout=0.1
+        )
+        self.temporal_transformer_encoder = nn.TransformerEncoder(temporal_encoder_layer, num_layers=1)
+        self.norm_temporal = RMSNorm(out_features)
         
-        self.mamba = Mamba(d_model=out_features, d_state=16, d_conv=4, expand=2)
-        self.ln = RMSNorm(out_features)
-        
+        # 입력과 출력의 채널 수가 다를 경우를 위한 잔차 연결
         if in_features != out_features:
             self.residual = nn.Sequential(
                 nn.Linear(in_features, out_features),
@@ -115,57 +176,103 @@ class ST_Mamba_Block(nn.Module):
         else:
             self.residual = nn.Identity()
 
-    def forward(self, x): # adj 인자 제거
-        # x shape: (N, T, J, C)
-        N, T, J, C = x.shape
-        
-        res = self.residual(x)
-        
-        # 1. Shift-GCN
-        x_gcn = self.gcn(x)
-
-        x_gcn_norm = self.norm_gcn(x_gcn)
-        
-        # 2. Mamba
-        x_reshaped = x_gcn_norm.permute(0, 2, 1, 3).contiguous().view(N * J, T, -1)
-        x_mamba = self.mamba(x_reshaped)
-        x_mamba = self.ln(x_mamba)
-        
-        # 3. 원래 형태로 복원
-        x_out = x_mamba.view(N, J, T, -1).permute(0, 2, 1, 3).contiguous()
-        
-        # 4. 잔차 연결
-        x_out = x_out + res
-        
-        return x_out
-
-class AttentionPooling(nn.Module):
-    def __init__(self, d_model):
-        super().__init__()
-        # 입력 특징(d_model)을 받아 1개의 어텐션 점수로 변환하는 선형 레이어
-        self.attention_scorer = nn.Linear(d_model, 1)
-
     def forward(self, x):
         # x shape: (N, T, J, C)
-        N, T, J, C = x.shape
+        N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.gcn.weight.shape[-1]
         
-        # 1. 어텐션 점수 계산을 위해 (N, T*J, C) 형태로 변경
-        x_reshaped = x.view(N, T * J, C)
+        res_main = self.residual(x)
         
-        # 2. 각 위치(T*J개)의 중요도를 계산
-        # (N, T*J, C) -> (N, T*J, 1)
-        attention_logits = self.attention_scorer(x_reshaped)
+        # --- 1. 공간 그래프 컨볼루션 ---
+        x_gcn = self.gcn(x)
+        x_gcn = self.norm_gcn(x_gcn)
+
+        # --- 2. 공간 Transformer 어텐션 ---
+        # 각 프레임(T) 내에서 관절(J)들 간의 관계를 학습
+        # (N, T, J, C) -> (N*T, J, C) 형태로 변경하여 J를 시퀀스 길이로 취급
+        res_spatial = x_gcn
+        x_reshaped_spatial = x_gcn.contiguous().view(N * T, J, C_out)
+        x_spatial_attn = self.spatial_transformer_encoder(x_reshaped_spatial)
+        x_spatial_attn = self.norm_spatial(x_spatial_attn)
+        # 원래 형태로 복원: (N*T, J, C) -> (N, T, J, C)
+        x_spatial_out = x_spatial_attn.view(N, T, J, C_out)
+        x_spatial_out = x_spatial_out + res_spatial # 공간 내 잔차 연결
+
+        # --- 3. 시간 Transformer 어텐션 ---
+        # 각 관절(J)의 시간(T)적 흐름에 따른 관계를 학습
+        # (N, T, J, C) -> (N*J, T, C) 형태로 변경하여 T를 시퀀스 길이로 취급
+        res_temporal = x_spatial_out
+        x_reshaped_temporal = x_spatial_out.permute(0, 2, 1, 3).contiguous().view(N * J, T, C_out)
+        x_temporal_attn = self.temporal_transformer_encoder(x_reshaped_temporal)
+        x_temporal_attn = self.norm_temporal(x_temporal_attn)
+        # 원래 형태로 복원: (N*J, T, C) -> (N, T, J, C)
+        x_temporal_out = x_temporal_attn.view(N, J, T, C_out).permute(0, 2, 1, 3).contiguous()
+        x_temporal_out = x_temporal_out + res_temporal # 시간 내 잔차 연결
         
-        # 3. Softmax를 적용하여 합이 1인 어텐션 가중치 생성
-        # (N, T*J, 1)
-        attention_weights = torch.softmax(attention_logits, dim=1)
+        # --- 4. 최종 잔차 연결 ---
+        x_final = x_temporal_out + res_main
         
-        # 4. 가중치와 원래 특징을 곱하여 가중 합(weighted sum) 계산
-        # (N, T*J, C) * (N, T*J, 1) -> (N, T*J, C)
-        # .sum(dim=1)을 통해 (N, C) 형태의 최종 요약 벡터 생성
-        context_vector = (x_reshaped * attention_weights).sum(dim=1)
+        return x_final
+
+class GCNTransformerModel(nn.Module):
+    def __init__(self, num_joints=50, num_coords=config.NUM_COORDS, num_classes=60):
+        super().__init__()
+
+        self.pose_encoder = nn.Sequential(
+            nn.Linear(num_joints * 3, 128),
+            nn.GELU(),
+            nn.Linear(128, 128)
+        )
+
+        self.input_projection = nn.Linear(num_coords, 64)
+        # PositionalEncoding 인스턴스 생성
+        self.pos_encoder_64 = PositionalEncoding(d_model=64)
+        self.pos_encoder_128 = PositionalEncoding(d_model=128)
         
-        return context_vector
+        # ST_Transformer_Block 사용
+        self.blocks = nn.ModuleList([
+            ST_Transformer_Block(in_features = 64, out_features = 64, num_joints = num_joints),
+            ST_Transformer_Block(in_features = 64, out_features = 128, num_joints = num_joints),
+            # ST_Transformer_Block(in_features = 128, out_features = 256, num_joints = num_joints)
+        ])
+
+        self.attention_pool = AttentionPooling(d_model=128)
+        
+        self.fusion_layer = nn.Sequential(
+            nn.Linear(128 * 2, 128),
+            nn.GELU(),
+            RMSNorm(128)
+        )
+        
+        self.dropout = nn.Dropout(p=0.5)
+        self.fc = nn.Linear(128, num_classes)
+
+    def forward(self, motion_features, first_frame_coords):
+        N = motion_features.shape[0]
+        flat_pose = first_frame_coords.view(N, -1)
+        pose_vector = self.pose_encoder(flat_pose)
+        
+        x = motion_features.permute(0, 2, 3, 1).contiguous()
+
+        # 먼저 채널 수를 7에서 64로 확장
+        x = self.input_projection(x)
+
+        # 64차원이 된 후에 위치 인코딩 적용
+        x = self.pos_encoder_64(x)
+        x = self.blocks[0](x) # 첫 번째 블록 (64 -> 64)
+        
+        # 두 번째 블록을 통과시켜 128차원으로 만든 후, 위치 인코딩 적용
+        x = self.blocks[1](x) # 두 번째 블록 (64 -> 128)
+        x = self.pos_encoder_128(x) # 128차원이 된 후에 위치 인코딩 적용
+
+        # x = self.blocks[2](x)
+        
+        motion_summary = self.attention_pool(x)
+        combined_summary = torch.cat([motion_summary, pose_vector], dim=-1)
+        
+        final_vector = self.fusion_layer(combined_summary)
+        final_vector = self.dropout(final_vector)
+        output = self.fc(final_vector)
+        return output
 
 class MambaBlock(nn.Module):
     # GCN 없이 Mamba와 잔차 연결만 포함한 블록
@@ -194,6 +301,48 @@ class MambaBlock(nn.Module):
         
         return x_out
 
+class ST_Mamba_Block(nn.Module):
+    # GCN과 Mamba를 하나로 묶고 잔차 연결을 포함한 블록
+    def __init__(self, in_features, out_features, num_joints):
+        super().__init__()
+        self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
+
+        self.norm_gcn = RMSNorm(out_features)
+
+        self.mamba = Mamba(d_model=out_features, d_state=16, d_conv=4, expand=2)
+        self.ln = RMSNorm(out_features)
+
+        if in_features != out_features:
+            self.residual = nn.Sequential(
+                nn.Linear(in_features, out_features),
+                RMSNorm(out_features)
+            )
+        else:
+            self.residual = nn.Identity()
+
+    def forward(self, x): # adj 인자 제거
+        # x shape: (N, T, J, C)
+        N, T, J, C = x.shape
+
+        res = self.residual(x)
+
+        # 1. Shift-GCN
+        x_gcn = self.gcn(x)
+
+        x_gcn_norm = self.norm_gcn(x_gcn)
+
+        # 2. Mamba
+        x_reshaped = x_gcn_norm.permute(0, 2, 1, 3).contiguous().view(N * J, T, -1)
+        x_mamba = self.mamba(x_reshaped)
+        x_mamba = self.ln(x_mamba)
+
+        # 3. 원래 형태로 복원
+        x_out = x_mamba.view(N, J, T, -1).permute(0, 2, 1, 3).contiguous()
+
+        # 4. 잔차 연결
+        x_out = x_out + res
+
+        return x_out
 
 class GCNMambaModel(nn.Module):
     def __init__(self, num_joints=25, num_coords=config.NUM_COORDS, num_classes=60):

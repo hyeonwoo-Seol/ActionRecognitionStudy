@@ -14,45 +14,89 @@ NUM_JOINTS = config.NUM_JOINTS
 BASE_NUM_JOINTS = 25
 TRAINING_SUBJECTS = [1, 2, 4, 5, 8, 9, 13, 14, 15, 16, 17, 18, 19, 25, 27, 28, 31, 34, 35, 38]
 
-def _read_skeleton_file(file_path):
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
+
+
+def _read_skeleton_file(filepath):
+    """
+    NTU RGB+D 데이터셋의 .skeleton 파일을 읽어 파싱하는 함수.
+    파일을 읽어 (num_frames, 2, 25, 3) 형태의 3D 좌표 numpy 배열로 반환합니다.
+    """
+    try:
+        with open(filepath, 'r') as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        print(f"Error: File not found at {filepath}")
+        return np.zeros((0, 2, BASE_NUM_JOINTS, 3))
 
     num_frames = int(lines[0])
-    frame_data = np.zeros((num_frames, 2, BASE_NUM_JOINTS, 3))
+    frames_data = []
     line_idx = 1
-    
-    
-    for i in range(num_frames):
-        if line_idx >= len(lines): break
 
+    for _ in range(num_frames):
+        if line_idx >= len(lines): break
+        
         num_bodies = int(lines[line_idx].strip())
         line_idx += 1
+        
+        # 각 프레임은 (2, 25, 3) shape의 0으로 채워진 배열로 초기화
+        frame_person_coords = np.zeros((2, BASE_NUM_JOINTS, 3))
 
-        bodies_read = 0
-        for b in range(num_bodies):
-            if bodies_read < 2:
-                line_idx += 1 # bodyID, clipped, ... 라인 스킵
-                num_joints_file = int(lines[line_idx].strip())
+        for i in range(num_bodies):
+            if line_idx >= len(lines): break
+            
+            # bodyID, clipped, etc. 정보 라인 (사용 안 함)
+            line_idx += 1 
+            
+            if line_idx >= len(lines): break
+            num_joints = int(lines[line_idx].strip())
+            line_idx += 1
+
+            for j in range(num_joints):
+                if line_idx >= len(lines): break
+                
+                joint_info = lines[line_idx].strip().split()
                 line_idx += 1
                 
-                joint_coords_frame = np.zeros((num_joints_file, 3))
-                for j in range(num_joints_file):
-                    joint_info = lines[line_idx].strip().split()
-                    joint_coords_frame[j] = [float(coord) for coord in joint_info[:3]]
-                    line_idx += 1
-                
-                frame_data[i, bodies_read, :, :] = joint_coords_frame
-                bodies_read += 1
-            # 2명을 초과하는 나머지 사람 데이터는 건너뜀
-            else:
-                line_idx += 1
-                other_num_joints = int(lines[line_idx].strip())
-                line_idx += (1 + other_num_joints)
-                
-    return frame_data
+                # 최대 2명의 사람, 25개의 관절 정보만 저장
+                if i < 2 and j < BASE_NUM_JOINTS:
+                    # x, y, z 좌표만 추출
+                    x, y, z = map(float, joint_info[:3])
+                    frame_person_coords[i, j] = [x, y, z]
+        
+        frames_data.append(frame_person_coords)
+    
+    if not frames_data:
+        return np.zeros((0, 2, BASE_NUM_JOINTS, 3))
+        
+    return np.stack(frames_data)
 
+    
+def _normalize_by_bone_length(coords):
+    """
+    척추 길이를 기준으로 3D 스켈레톤 좌표를 정규화합니다.
+    입력 shape: (num_frames, 2, 25, 3)
+    출력 shape: (num_frames, 2, 25, 3)
+    """
+    # 기준 관절 인덱스 정의
+    SPINE_SHOULDER_JOINT = 20
+    SPINE_BASE_JOINT = 0
+    
+    # 각 프레임, 각 사람(person)에 대해 기준 관절의 좌표를 선택합니다.
+    # shape: (num_frames, 2, 1, 3)
+    ref_joint1_coords = coords[:, :, SPINE_SHOULDER_JOINT:SPINE_SHOULDER_JOINT+1, :]
+    ref_joint2_coords = coords[:, :, SPINE_BASE_JOINT:SPINE_BASE_JOINT+1, :]
+    
+    # 척추 길이(유클리드 거리)를 계산합니다. 0으로 나누는 것을 방지하기 위해 작은 값(epsilon)을 더합니다.
+    # shape: (num_frames, 2, 1)
+    torso_lengths = np.linalg.norm(ref_joint1_coords - ref_joint2_coords, axis=-1) + 1e-8
 
+    # 브로드캐스팅을 위해 차원을 추가해줍니다. (num_frames, 2, 1) -> (num_frames, 2, 1, 1)
+    torso_lengths = np.expand_dims(torso_lengths, axis=-1)
+    
+    # 모든 관절 좌표를 해당 프레임의 척추 길이로 나눕니다.
+    normalized_coords = coords / torso_lengths
+    
+    return normalized_coords
 
 def _calculate_features(coords):
     center_joint = coords[:, :, 0:1, :]
@@ -95,8 +139,15 @@ def calculate_and_save_stats():
 
         if coords.shape[0] == 0: continue
 
-        coords = coords[::2, :, :]
-        features = _calculate_features(coords)
+        # 뼈 길이 정규화
+        normalized_coords = _normalize_by_bone_length(coords)
+
+        # 다운샘플링
+        downsampled_coords = normalized_coords[::2, :, :]
+
+        # 4. 전처리된 좌표로 특징 계산
+        features = _calculate_features(downsampled_coords)
+        
         valid_frames = features.reshape(-1, features.shape[-1])
         valid_frames = valid_frames[np.abs(valid_frames).sum(axis=1) > 1e-6]
         if valid_frames.shape[0] > 0:
@@ -139,8 +190,16 @@ def main():
             first_frame_raw = coords[0, :, :, :]
             first_frame_coords = np.concatenate((first_frame_raw[0], first_frame_raw[1]), axis=0)
 
-            coords = coords[::2, :, :, :]
-            raw_features = _calculate_features(coords)
+            
+            # 뼈길이 정규화
+            normalized_coords = _normalize_by_bone_length(coords)
+
+            # 다운샘플링
+            normalized_coords = normalized_coords[::2, :, :, :]
+
+            # 특징 계산
+            raw_features = _calculate_features(normalized_coords)
+            
             
             num_frames = raw_features.shape[0]
             if num_frames < MAX_FRAMES:

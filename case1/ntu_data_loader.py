@@ -17,7 +17,7 @@ class NTURGBDDataset(Dataset):
         self.max_frames = max_frames
         self.training_subjects = [1, 2, 4, 5, 8, 9, 13, 14, 15, 16, 17, 18, 19, 25, 27, 28, 31, 34, 35, 38]
         self.samples = []
-        self._load_data()
+        self._load_data_path()
 
         
         stats_path = os.path.join(os.path.dirname(data_path.rstrip('/')), 'stats.npz')
@@ -31,12 +31,11 @@ class NTURGBDDataset(Dataset):
             self.mean = torch.zeros(config.NUM_COORDS)
             self.std = torch.ones(config.NUM_COORDS)
 
-
-    def _load_data(self):
-        print(f"Loading {self.split} data into memory from '{self.data_path}'...")
+    def _load_data_path(self):
+        print(f"Scanning {self.split} data paths from '{self.data_path}'...")
         filenames = os.listdir(self.data_path)
         
-        for filename in tqdm(filenames, desc=f"[{self.split.upper()}] Loading data into RAM"):
+        for filename in tqdm(filenames, desc=f"[{self.split.upper()}] Scanning file paths"):
             if not filename.endswith('.pt'):
                 continue
 
@@ -45,22 +44,19 @@ class NTURGBDDataset(Dataset):
             
             file_path = os.path.join(self.data_path, filename)
 
-            # 파일 경로가 아닌, 실제 데이터를 self.samples 리스트에 저장
+            # 파일 경로만 self.samples 리스트에 저장
             if self.split == 'train' and is_training_subject:
-                # torch.load를 여기서 호출하여 데이터를 미리 읽음
-                data = torch.load(file_path)
-                self.samples.append(data)
+                self.samples.append(file_path)
             elif self.split == 'val' and not is_training_subject:
-                # torch.load를 여기서 호출하여 데이터를 미리 읽음
-                data = torch.load(file_path)
-                self.samples.append(data)
+                self.samples.append(file_path)
 
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, index):
-        saved_data = self.samples[index]
+        file_path = self.samples[index]
+        saved_data = torch.load(file_path)
         
         # 1. 정규화되지 않은 원본(raw) 특징 로드
         features = saved_data['data'] # shape: (T, J, 7)

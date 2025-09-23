@@ -15,7 +15,8 @@ import matplotlib.pyplot as plt
 
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
-from model import GCNMambaModel
+# from model import GCNMambaModel
+from model import GCNTransformerModel
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
 def set_seed(seed):
@@ -163,18 +164,17 @@ def main():
     )
 
     # --- 모델, 손실함수, 옵티마이저 초기화 ---
-    model = GCNMambaModel(
+    model = GCNTransformerModel(
         num_joints = config.NUM_JOINTS,
         num_coords = config.NUM_COORDS,
         num_classes = config.NUM_CLASSES
     ).to(device)
-    #model = torch.compile(model)
     
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.AdamW(
         model.parameters(),
         lr = config.LEARNING_RATE,
-        weight_decay = 0.1
+        weight_decay = 0.01
     )
     scaler = GradScaler()
 
