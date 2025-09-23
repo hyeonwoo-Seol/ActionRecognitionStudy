@@ -141,7 +141,7 @@ class PositionalEncoding(nn.Module):
         """
         x: (N, T, C) 형태의 텐서에 위치 정보를 더해줍니다.
         """
-        x = x + self.pe[:, :x.size(1), :].unsqueeze(2)
+        x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
 
 class StandardTransformerBlock(nn.Module):

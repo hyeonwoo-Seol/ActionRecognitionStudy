@@ -148,7 +148,7 @@ self.fusion_layer = nn.Sequential(
 
 실험1에서 Dropout 비율을 0.7 -> 0.5로 하고,
 
-Weight Decay를 0.1 에서 0.001로 바꿨다.
+Weight Decay를 0.1 에서 0.01로 바꿨다.
 
 ## 결과
 
@@ -156,9 +156,10 @@ Weight Decay를 0.1 에서 0.001로 바꿨다.
 
 # 실험4
 
-실험 3에서 사용한 2개의 Shift-GCN + Transformer 아키텍처를 1개로 줄인다.
+실험 1에서 뼈 길이 정규화를 추가하고, Dropout 비율은 0.7 -> 0.5로 하고, Weight Decay를 0.1에서 0.01로 바꿨다.
 
-그리고 해당 아키텍처의 output 차원을 64에서 128로 수정한다.
+실험 3과 비교해서 뼈 정규화 길이 추가한 상태에서 표준 Transformer와 ST-Transformer의 차이를 비교하고자 한다.
+
 
 ## 결과
 
