@@ -144,6 +144,58 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:, :x.size(1), :].unsqueeze(2)
         return self.dropout(x)
 
+class StandardTransformerBlock(nn.Module):
+    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
+        super().__init__()
+        # 1. 공간적 특징을 위한 Shift-GCN
+        self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
+        self.norm_gcn = RMSNorm(out_features)
+
+        # 2. 표준 Transformer 인코더
+        # 공간과 시간 차원을 합친 전체 시퀀스에 대해 어텐션을 수행
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
+            activation='gelu', batch_first=True, dropout=0.1
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
+        self.norm_transformer = RMSNorm(out_features)
+        
+        # 입력과 출력의 채널 수가 다를 경우를 위한 잔차 연결
+        if in_features != out_features:
+            self.residual = nn.Sequential(
+                nn.Linear(in_features, out_features),
+                RMSNorm(out_features)
+            )
+        else:
+            self.residual = nn.Identity()
+
+    def forward(self, x):
+        # x shape: (N, T, J, C)
+        N, T, J, C_in = x.shape
+        C_out = self.gcn.weight.shape[-1]
+        
+        res = self.residual(x)
+        
+        # --- 1. 공간 그래프 컨볼루션 ---
+        x_gcn = self.gcn(x)
+        x_gcn = self.norm_gcn(x_gcn)
+
+        # --- 2. 표준 Transformer 어텐션 ---
+        # (N, T, J, C) -> (N, T*J, C) 형태로 펼쳐서 하나의 시퀀스로 만듦
+        x_flattened = x_gcn.contiguous().view(N, T * J, C_out)
+        
+        # Transformer 인코더는 (N, SeqLen, C) 형태의 입력을 받음
+        x_attn = self.transformer_encoder(x_flattened)
+        x_attn = self.norm_transformer(x_attn)
+        
+        # 원래 형태로 복원: (N, T*J, C) -> (N, T, J, C)
+        x_unflattened = x_attn.view(N, T, J, C_out)
+        
+        # --- 3. 최종 잔차 연결 ---
+        x_final = x_unflattened + res
+        
+        return x_final
+
 class ST_Transformer_Block(nn.Module):
     def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
         super().__init__()
@@ -224,15 +276,16 @@ class GCNTransformerModel(nn.Module):
         )
 
         self.input_projection = nn.Linear(num_coords, 64)
-        # PositionalEncoding 인스턴스 생성
-        self.pos_encoder_64 = PositionalEncoding(d_model=64)
-        self.pos_encoder_128 = PositionalEncoding(d_model=128)
         
-        # ST_Transformer_Block 사용
+        self.pos_encoder = PositionalEncoding(
+            d_model=64, 
+            max_len=config.MAX_FRAMES * config.NUM_JOINTS
+        )
+        
         self.blocks = nn.ModuleList([
-            ST_Transformer_Block(in_features = 64, out_features = 64, num_joints = num_joints),
-            ST_Transformer_Block(in_features = 64, out_features = 128, num_joints = num_joints),
-            # ST_Transformer_Block(in_features = 128, out_features = 256, num_joints = num_joints)
+            StandardTransformerBlock(in_features=64, out_features=64, num_joints=num_joints),
+            StandardTransformerBlock(in_features=64, out_features=128, num_joints=num_joints),
+            # StandardTransformerBlock(in_features=128, out_features=256, num_joints=num_joints)
         ])
 
         self.attention_pool = AttentionPooling(d_model=128)
@@ -247,22 +300,21 @@ class GCNTransformerModel(nn.Module):
         self.fc = nn.Linear(128, num_classes)
 
     def forward(self, motion_features, first_frame_coords):
-        N = motion_features.shape[0]
+        N, _, T, J = motion_features.shape
+        C_proj = 64 # self.input_projection의 출력 차원
+        
         flat_pose = first_frame_coords.view(N, -1)
         pose_vector = self.pose_encoder(flat_pose)
         
         x = motion_features.permute(0, 2, 3, 1).contiguous()
+        x = self.input_projection(x) # (N, T, J, 64)
 
-        # 먼저 채널 수를 7에서 64로 확장
-        x = self.input_projection(x)
-
-        # 64차원이 된 후에 위치 인코딩 적용
-        x = self.pos_encoder_64(x)
-        x = self.blocks[0](x) # 첫 번째 블록 (64 -> 64)
+        x_flat = x.view(N, T * J, C_proj)
+        x_flat_pe = self.pos_encoder(x_flat)
+        x = x_flat_pe.view(N, T, J, C_proj) # 다시 원래 형태로 복원
         
-        # 두 번째 블록을 통과시켜 128차원으로 만든 후, 위치 인코딩 적용
-        x = self.blocks[1](x) # 두 번째 블록 (64 -> 128)
-
+        x = self.blocks[0](x) # (64 -> 64)
+        x = self.blocks[1](x) # (64 -> 128)
         # x = self.blocks[2](x)
         
         motion_summary = self.attention_pool(x)
@@ -272,7 +324,6 @@ class GCNTransformerModel(nn.Module):
         final_vector = self.dropout(final_vector)
         output = self.fc(final_vector)
         return output
-
 class MambaBlock(nn.Module):
     # GCN 없이 Mamba와 잔차 연결만 포함한 블록
     def __init__(self, d_model):
