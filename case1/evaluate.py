@@ -42,12 +42,16 @@ def evaluate_model(checkpoint_path):
     
     eval_bar = tqdm(val_loader, desc="[Evaluate]", colour="yellow")
     with torch.no_grad():
-        for data, labels in eval_bar:
-            data, labels = data.to(config.DEVICE), labels.to(config.DEVICE)
-            outputs = model(data)
+        for motion_features, labels, first_frame_coords in eval_bar:
+            motion_features = motion_features.to(config.DEVICE)
+            labels = labels.to(config.DEVICE)
+            first_frame_coords = first_frame_coords.to(config.DEVICE)
+            
+            # 💡 <<-- 변경점: 모델에 2개의 인자 전달 -->>
+            outputs = model(motion_features, first_frame_coords)
             loss = criterion(outputs, labels)
             
-            total_loss += loss.item() * data.size(0)
+            total_loss += loss.item() * motion_features.size(0)
             
             _, predicted = torch.max(outputs.data, 1)
             total_samples += labels.size(0)
@@ -56,6 +60,7 @@ def evaluate_model(checkpoint_path):
             avg_loss = total_loss / total_samples
             avg_acc = correct_predictions / total_samples
             eval_bar.set_postfix(loss=f"{avg_loss:.4f}", acc=f"{avg_acc:.4f}")
+
 
     # --- 최종 결과 출력 ---
     final_loss = total_loss / len(val_dataset)

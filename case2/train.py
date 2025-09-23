@@ -174,7 +174,7 @@ def main():
     optimizer = optim.AdamW(
         model.parameters(),
         lr = config.LEARNING_RATE,
-        weight_decay = 0.1
+        weight_decay = 0.01
     )
     scaler = GradScaler()
 

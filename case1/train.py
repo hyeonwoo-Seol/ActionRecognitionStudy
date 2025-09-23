@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingWarmRestarts, SequentialLR
 from tqdm import tqdm
 import os
 import random
@@ -15,7 +15,8 @@ import matplotlib.pyplot as plt
 
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
-from model import GCNMambaModel
+# from model import GCNMambaModel
+from model import GCNTransformerModel
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
 def set_seed(seed):
@@ -66,35 +67,32 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler):
     total_samples = 0
     
     train_bar = tqdm(loader, desc="[Train]", colour="green")
-    for data, labels in train_bar:
-        data, labels = data.to(device), labels.to(device)
+    for motion_features, labels, first_frame_coords in train_bar:
+        motion_features = motion_features.to(device)
+        labels = labels.to(device)
+        first_frame_coords = first_frame_coords.to(device)
         
         optimizer.zero_grad()
 
-        with autocast(device_type=device): # device_type 인자 추가
-            outputs = model(data)
+        with autocast(device_type=device):
+            outputs = model(motion_features, first_frame_coords)
             loss = criterion(outputs, labels)
         
         scaler.scale(loss).backward()
-
-        # Gradient Clipping
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = config.GRAD_CLIP_NORM)
-
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.GRAD_CLIP_NORM)
         scaler.step(optimizer)
         scaler.update()
                 
-        running_loss += loss.item() * data.size(0)
-        
+        running_loss += loss.item() * motion_features.size(0)
         _, predicted = torch.max(outputs.data, 1)
         total_samples += labels.size(0)
         correct_predictions += (predicted == labels).sum().item()
         
         train_bar.set_postfix(loss=f"{running_loss/total_samples:.4f}", acc=f"{correct_predictions/total_samples:.4f}")
-        
-    avg_loss = running_loss / total_samples
-    avg_acc = correct_predictions / total_samples
-    return avg_loss, avg_acc
+
+    return running_loss / total_samples, correct_predictions / total_samples
+
 
 def validate_one_epoch(model, loader, criterion, device):
     # 한 에폭 동안 모델을 검증하는 함수
@@ -105,14 +103,16 @@ def validate_one_epoch(model, loader, criterion, device):
     
     val_bar = tqdm(loader, desc="[Val]", colour="cyan")
     with torch.no_grad():
-        for data, labels in val_bar:
-            data, labels = data.to(device), labels.to(device)
+        for motion_features, labels, first_frame_coords in val_bar:
+            motion_features = motion_features.to(device)
+            labels = labels.to(device)
+            first_frame_coords = first_frame_coords.to(device)
 
-            with autocast(device_type=device): # device_type 인자 추가
-                outputs = model(data)
+            with autocast(device_type=device):
+                outputs = model(motion_features, first_frame_coords)
                 loss = criterion(outputs, labels)
             
-            running_loss += loss.item() * data.size(0)
+            running_loss += loss.item() * motion_features.size(0)
 
             _, predicted = torch.max(outputs.data, 1)
             total_samples += labels.size(0)
@@ -120,9 +120,8 @@ def validate_one_epoch(model, loader, criterion, device):
             
             val_bar.set_postfix(loss=f"{running_loss/total_samples:.4f}", acc=f"{correct_predictions/total_samples:.4f}")
             
-    avg_loss = running_loss / total_samples
-    avg_acc = correct_predictions / total_samples
-    return avg_loss, avg_acc
+    return running_loss / total_samples, correct_predictions / total_samples
+
 
 def main():
     # 시드 고정
@@ -165,12 +164,11 @@ def main():
     )
 
     # --- 모델, 손실함수, 옵티마이저 초기화 ---
-    model = GCNMambaModel(
+    model = GCNTransformerModel(
         num_joints = config.NUM_JOINTS,
         num_coords = config.NUM_COORDS,
         num_classes = config.NUM_CLASSES
     ).to(device)
-    #model = torch.compile(model)
     
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.AdamW(
@@ -181,7 +179,7 @@ def main():
     scaler = GradScaler()
 
     
-    # 웜업 스케줄러
+    # 1. 웜업 스케줄러 (Warmup Scheduler)
     warmup_scheduler = LinearLR(
         optimizer,
         start_factor = 0.01,
@@ -189,14 +187,15 @@ def main():
         total_iters = config.WARMUP_EPOCHS
     )
 
-    # 메인 스케줄러
-    main_scheduler = CosineAnnealingLR(
+    # 2. 메인 스케줄러 (CosineAnnealingWarmRestarts)
+    main_scheduler = CosineAnnealingWarmRestarts(
         optimizer,
-        T_max = config.EPOCHS - config.WARMUP_EPOCHS,
-        eta_min = 0
+        T_0 = config.T_0,          # 첫 번째 주기의 길이
+        T_mult = config.T_MULT,    # 주기가 반복될수록 길이 T_i에 곱해줄 값
+        eta_min = config.ETA_MIN   # 최소 학습률
     )
 
-    # 두 스케줄러를 순차적으로 연결
+    # 3. 두 스케줄러를 순차적으로 연결
     scheduler = SequentialLR(
         optimizer,
         schedulers = [warmup_scheduler, main_scheduler],
@@ -206,6 +205,7 @@ def main():
     # 체크포인트 laod 로직
     start_epoch = 0
     best_accuracy = 0.0
+    last_val_acc = 0.0
     checkpoint_path = os.path.join(config.SAVE_DIR, "best_model.pth.tar")
 
     # 조기 종료 변수 추가
@@ -219,6 +219,7 @@ def main():
         checkpoint = load_checkpoint(checkpoint_path, model, optimizer, device)
         start_epoch = checkpoint['epoch']
         best_accuracy = checkpoint['best_acc']
+        last_val_acc = checkpoint.get('last_val_acc', 0.0)
         
         if 'scaler' in checkpoint:
             scaler.load_state_dict(checkpoint['scaler'])
@@ -252,6 +253,8 @@ def main():
             
             print(f"Epoch {epoch+1} Summary | Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} | LR: {current_lr:.6f}")
 
+            
+            
             # 최고 검증 정확도를 가진 모델 저장
             if val_acc > best_accuracy:
                 print(f"New best accuracy: {val_acc:.4f}! Saving model...")
@@ -261,13 +264,16 @@ def main():
                     'state_dict': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'best_acc': best_accuracy,
-                    'scaler': scaler.state_dict()
+                    'scaler': scaler.state_dict(),
+                    'last_val_acc': last_val_acc
                 }, directory=config.SAVE_DIR, filename="best_model.pth.tar")
                 patience_counter = 0 # 최고 기록 경신 시 카운터 초기화
             else:
                 patience_counter += 1
                 print(f"No imporvement in validation accuracy for {patience_counter} epoch(s).")
 
+
+            
             if patience_counter >= patience:
                 print(f"Early stopping triggered after {patience} epochs without improvement.")
                 break

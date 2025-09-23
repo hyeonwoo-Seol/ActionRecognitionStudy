@@ -114,6 +114,8 @@ Best Validation Accuracy achieved: 0.5991 (59.91%)
 
 실험 1에서 모델의 복잡도를 늘렸다.
 
+그리고 Learning Rate를 0.0003에서 0.001로 높였다
+
 ```
 self.pose_encoder = nn.Sequential(
      nn.Linear(num_joints * 3, 128),
@@ -133,9 +135,19 @@ self.fusion_layer = nn.Sequential(
 )
 ```
 
+## 결과
+
+![Study2](image/Study2.png)
+
 # 실험3
 
-실험 2에서 Dropout 비율을 0.7 -> 0.5로 낮추었다.
+실험1에서 Dropout 비율을 0.7 -> 0.5로 하고,
+
+Weight Decay를 0.1 에서 0.001로 바꿨다.
+
+## 결과
+
+
 
 # 실험n Shift-GCN + Mamba
 ```
