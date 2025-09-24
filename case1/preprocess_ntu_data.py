@@ -209,6 +209,7 @@ def calculate_and_save_stats():
     all_features = [] # 모든 훈련 데이터의 특징을 저장할 리스트
     filenames = os.listdir(SOURCE_DATA_PATH)
 
+
     process_bar = tqdm(filenames, desc="[Calculating Stats]")
     for filename in process_bar:
         if not filename.endswith('.skeleton'): continue # .skeleton 파일이 아니면 건너뛴다.
@@ -226,26 +227,42 @@ def calculate_and_save_stats():
 
         if coords.shape[0] == 0: continue # 파일 내용이 비어있으면 건너뛴다.
 
-        # 뼈 길이 정규화
+
+        # >> 뼈 길이 정규화
         normalized_coords = _normalize_by_bone_length(coords)
 
-        # 다운샘플링
+        # >> 다운샘플링
         downsampled_coords = normalized_coords[::2, :, :]
 
-        # 4. 전처리된 좌표로 특징 계산
+        # >> 전처리된 좌표로 특징 계산
         features = _calculate_features(downsampled_coords)
         
+
+        # >> 모든 프레임과 관절을 하나의 차원으로 펼친다.
+        # >> (num_frames * 50, 7)
         valid_frames = features.reshape(-1, features.shape[-1])
+
+
+        # >> 특징 값이 거의 0인, 즉 움직임이 없는 프레임을 제외한다.
         valid_frames = valid_frames[np.abs(valid_frames).sum(axis=1) > 1e-6]
         if valid_frames.shape[0] > 0:
             all_features.append(valid_frames)
 
+
+    # >> 모든 특징 데이터를 하나의 큰 numpy 배열로 결합한다.
     all_features_np = np.concatenate(all_features, axis=0)
+
+
+    # >> 평균과 표준편차를 계산한다.
     mean = np.mean(all_features_np, axis=0)
     std_raw = np.std(all_features_np, axis=0)
+    
+
     epsilon = 1e-6  # 0으로 나누는 것을 방지하기 위한 아주 작은 값
     std = np.clip(std_raw, a_min=epsilon, a_max=None)
     
+
+    # >> 계산된 통계치를 .npz 파일로 저장합니다. 나중에 불러오기 쉽도록 reshape 한다.
     np.savez(STATS_FILE, mean=mean.reshape(1, 1, -1), std=std.reshape(1, 1, -1))
     print(f"통계치 계산 완료. '{STATS_FILE}' 파일에 저장되었습니다.")
 
@@ -253,36 +270,50 @@ def calculate_and_save_stats():
 
 
 # ## ----------------------------------------------------------------------------------
-#
+# 함수: main
+# 기능: 전체 데이터 전처리 파이프라인을 실행하는 메인 함수입니다.
+# 1. 통계치 파일(.npz) 존재 여부 확인 및 생성
+# 2. 모든 .skeleton 파일을 순회하며 전처리 수행
+# 3. 전처리된 데이터를 .pt 파일로 저장
 # ## ----------------------------------------------------------------------------------
 def main():
-    """특징을 계산하고 정규화 없이 그대로 저장하는 메인 함수"""
     
-    # 통계 파일이 없으면 최초 1회 생성
+    # >> 통계 파일이 없으면 최초 1회 생성한다.
     if not os.path.exists(STATS_FILE):
         calculate_and_save_stats()
         
     print("\n--- 2단계: 특징 계산 및 원본(raw) 데이터 저장 시작 ---")
-    
+
+
+    # >> 결과물을 저장할 디렉토리가 없다면 생성한다.    
     if not os.path.exists(TARGET_DATA_PATH):
         os.makedirs(TARGET_DATA_PATH)
+
 
     filenames = os.listdir(SOURCE_DATA_PATH)
     process_bar = tqdm(filenames, desc="[Saving Raw Features]")
     for filename in process_bar:
-        if not filename.endswith('.skeleton'): continue
+        if not filename.endswith('.skeleton'): continue # .skeleton 파일이 아니라면 해당 파일은 넘어간다.
         
+        # >> 디렉터리 경로와 파일 이름을 결합한다.
+        # >> os.path.join이 운영체제에 적합한 경로 구분자를 알아서 사용해준다.
         skeleton_path = os.path.join(SOURCE_DATA_PATH, filename)
+        
+        # >> 위에서 결합한 경로에서 .skeleton 파일을 읽어서 안에 있는 x, y, z 좌표를 담는다.
         coords = _read_skeleton_file(skeleton_path)
         
+
+        # >> 파일이 비어있는 경우, 0으로 채워진 더미 데이터를 생성한다.
         if coords.shape[0] == 0:
             processed_features = np.zeros((MAX_FRAMES, NUM_JOINTS, config.NUM_COORDS))
             first_frame_coords = np.zeros((NUM_JOINTS, 3))
-        else:
+        else: 
+            # >> 시각화 등에 사용할 첫 번째 프레임의 원본 좌표를 저장한다.
             first_frame_raw = coords[0, :, :, :]
             first_frame_coords = np.concatenate((first_frame_raw[0], first_frame_raw[1]), axis=0)
 
-            
+
+            # >> 데이터를 전처리한다.
             # 뼈길이 정규화
             normalized_coords = _normalize_by_bone_length(coords)
 
@@ -291,25 +322,33 @@ def main():
 
             # 특징 계산
             raw_features = _calculate_features(normalized_coords)
-            
-            
+
+
+            # >> 패딩 및 자르기 (Padding & Truncating)
+            # 모든 데이터의 프레임 길이를 MAX_FRAMES로 통일한다.
             num_frames = raw_features.shape[0]
-            if num_frames < MAX_FRAMES:
+            if num_frames < MAX_FRAMES: # 프레임 수가 MAX_FRAMES보다 작으면, 부족한 만큼 0으로 채운다.
                 pad_width = MAX_FRAMES - num_frames
                 padding = np.zeros((pad_width, NUM_JOINTS, config.NUM_COORDS))
                 processed_features = np.concatenate((raw_features, padding), axis=0)
-            else:
+            else: # 프레임 수가 MAX_FRAMES보다 크면, MAX_FRAMES까지만 사용한다.
                 processed_features = raw_features[:MAX_FRAMES]
-        
+
+
+        # >> 파일 이름에서 액션 ID를 추출하고, 0부터 시작하는 레이블로 변환한다. (A001 -> 0)
         action_id = int(filename[17:20])
         label = action_id - 1
 
+
+        # >> 저장할 데이터를 딕셔너리 형태로 구성한다.
         data_to_save = {
             'data': torch.from_numpy(processed_features).float(),
             'label': torch.tensor(label, dtype=torch.long),
             'first_frame_coords': torch.from_numpy(first_frame_coords).float()
         }
 
+
+        # >> 저장할 파일 경로를 설정하고, .pt 파일을 해당 경로에 저장한다.
         target_filename = filename.replace('.skeleton', '.pt')
         target_filepath = os.path.join(TARGET_DATA_PATH, target_filename)
         torch.save(data_to_save, target_filepath)
@@ -319,5 +358,6 @@ def main():
 
 
 
+# >> 이 스크립트가 직접 실행될 때 main() 함수를 호출한다.
 if __name__ == '__main__':
     main()
