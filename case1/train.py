@@ -1,5 +1,19 @@
 # train.py
 
+# ## --------------------------------------------------------------------------
+# model.py의 모델을 사용하여 NTU-RGB+D 데이터셋을 학습하고
+# 검증하는 전체 파이프라인을 포함한다.
+# 주요 기능:
+# 1. 재현성을 위한 시드 고정
+# 2. 데이터 로딩 및 전처리
+# 3. 모델, 손실 함수, 옵티마이저, 학습률 스케줄러 초기화
+# 4. 학습 및 검증 루프 실행
+# 5. 체크포인트 저장 및 불러오기
+# 6. 조기 종료 
+# 7. 학습 과정 시각화 및 저장
+# ## --------------------------------------------------------------------------
+
+
 import torch
 # torch.set_float32_matmul_precision('high')
 import torch.nn as nn
@@ -15,28 +29,41 @@ import matplotlib.pyplot as plt
 
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
-# from model import GCNMambaModel
 from model import GCNTransformerModel
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
+
+
+
+# ## ------------------------------------------------------
+# 시드 고정 함수
+# ## ------------------------------------------------------
 def set_seed(seed):
-    # 재현성을 위해 시드를 고정하는 함수
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
+    random.seed(seed) # 파이썬 내장 random 시드 고정
+    np.random.seed(seed) # numpy random 시드 고정
+    torch.manual_seed(seed) # Pytorch CPU 연산 시드 고정
+
+    if torch.cuda.is_available(): # GPU 연산 시드 고정
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed) # 멀티-GPU 사용 시
-    # cuDNN 설정
+    
+    # >> cuDNN 설정
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = False # False -> 동일한 입력 크기에 대해 같은 알고리즘 적용
 
+
+
+
+# ## ---------------------------------------------------------
+# 학습 및 검증 과정의 Loss와 Acc를 기록하고 그래프로 만들기
+# ## ---------------------------------------------------------
 def plot_history(history, save_path):
     fig, ax1 = plt.subplots(figsize=(12, 8))
 
+    # >> Epoch 수를 X축으로 설정
     epochs = range(1, len(history['train_acc']) + 1)
 
-    # Accuracy 플롯 (왼쪽 y축)
+    # >> 왼쪽 Y축에 정확도
     ax1.plot(epochs, history['train_acc'], 'g-', label='Train Accuracy')
     ax1.plot(epochs, history['val_acc'], 'b-', label='Validation Accuracy')
     ax1.set_xlabel('Epochs')
@@ -44,46 +71,77 @@ def plot_history(history, save_path):
     ax1.tick_params(axis='y', labelcolor='b')
     ax1.grid(True)
 
-    # Loss 플롯 (오른쪽 y축)
+    # >> 오른쪽 Y축에 손실
     ax2 = ax1.twinx()
     ax2.plot(epochs, history['train_loss'], 'r--', label='Train Loss')
     ax2.plot(epochs, history['val_loss'], 'm--', label='Validation Loss')
     ax2.set_ylabel('Loss', color='r')
     ax2.tick_params(axis='y', labelcolor='r')
 
-    # 그래프 제목 및 범례
+    # >> 그래프 제목 및 범례
     fig.suptitle('Training and Validation History', fontsize=16)
     fig.legend(loc='upper right', bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
     
+    # >> 완성된 그래프를 이미지로 저장한다.
     plt.savefig(save_path)
     print(f"\nTraining history graph saved to '{save_path}'")
     plt.close()
 
+
+
+
+# ## -----------------------------------------------------------------
+# epcoh 동안 모델의 학습을 수행한다.
+# ## -----------------------------------------------------------------
 def train_one_epoch(model, loader, criterion, optimizer, device, scaler):
-    # 한 에폭 동안 모델을 훈련시키는 함수
+    # >> 모델을 학습 모드로 설정한다.
     model.train()
+
+    # >> 모든 Epoch들의 총 손실, 맞춘 예측 수, 전체 샘플 수를 기록할 변수들이다.
     running_loss = 0.0
     correct_predictions = 0
     total_samples = 0
     
+
     train_bar = tqdm(loader, desc="[Train]", colour="green")
+    # >> 데이터 로더로부터 미니배치를 받아서 학습을 진행한다.
     for motion_features, labels, first_frame_coords in train_bar:
+        # >> 모션 특징, 레이블, 첫 프레임 좌표값을 지정된 device로 이동시킨다.
         motion_features = motion_features.to(device)
         labels = labels.to(device)
         first_frame_coords = first_frame_coords.to(device)
         
+        # >> 이전 배치의 기울기를 초기화한다.
+        # >> 이를 하지 않으면 이전 배치들의 오차에 현재 배치가 영향을 받는다.
         optimizer.zero_grad()
 
+
+        # >> autocast Context 내에서 연산을 수행하여 자동 혼합 정밀도인 AMP를 사용한다.
+        # >> 성능 향상 및 메모리 사용량 감소를 위함이다.
         with autocast(device_type=device):
+            # >> 순전파를 수행하여 예측 결과를 얻는다.
             outputs = model(motion_features, first_frame_coords)
+            # >> 손실을 계산한다.
             loss = criterion(outputs, labels)
         
+        # ## ------------------------------------------------------------------------------
+        # AMP로 float32 대신 float16으로 연산을 수행하면 역전파 과정에서 기울기값이
+        # 0이 되는 현상이 발생할 수 있다. 이를 해결하기 위해 GradScaler를 사용한다.
+        # loss에 큰 수를 곱한 뒤 역전파를 하고, 그 다음에 원상 복구 후 기울기 클리핑을 적용한다.
+        # 원상 복구하는 이유는 기울기 클리핑을 정확하게 수행하고 가중치를 올바르게 업데이트하기 위함이다.
+        # ## -------------------------------------------------------------------------------
+        # >> GradScaler를 사용하여 손실 값 스케일을 조정하고 역전파한다.
         scaler.scale(loss).backward()
+        # >> 옵티마이저가 Step을 진행하기 전에, 스케일된 기울기를 복원한다.
         scaler.unscale_(optimizer)
+        # >> 기울기 폭발을 방지하기 위해 기울기 클리핑을 수행한다.
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.GRAD_CLIP_NORM)
+        # >> 옵티마이저를 사용하여 가중치를 업데이트한다.
         scaler.step(optimizer)
+        # >> 다음 반복을 위해 GradScaler의 스케일 팩터를 업데이트한다.
         scaler.update()
-                
+
+
         running_loss += loss.item() * motion_features.size(0)
         _, predicted = torch.max(outputs.data, 1)
         total_samples += labels.size(0)
