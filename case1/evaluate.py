@@ -47,7 +47,7 @@ def evaluate_model(checkpoint_path):
             labels = labels.to(config.DEVICE)
             first_frame_coords = first_frame_coords.to(config.DEVICE)
             
-            # 💡 <<-- 변경점: 모델에 2개의 인자 전달 -->>
+            
             outputs = model(motion_features, first_frame_coords)
             loss = criterion(outputs, labels)
             

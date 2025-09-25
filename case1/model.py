@@ -1,39 +1,37 @@
 # model.py
-# Shift-GCN + Transformer 3layer
+# ## ------------------------------------------------------------
+# 1. Shift-GCN
+# 2-1. RMSNormalization
+# 2-2. Attention Pooling
+# 3. Standard-Transformer
+# 4. Spatial-Temporal Transformer
+# 5. Shift-GCN + Standard-Transformer
+# 6. Shift-GCN + ST-Transformer
+# ## ------------------------------------------------------------
+
 
 import torch
 import torch.nn as nn
-from mamba_ssm import Mamba
 import numpy as np
 import config
 import math
 
-class RMSNorm(nn.Module):
-    def __init__(self, d, eps=1e-6):
-        super().__init__()
-        self.eps = eps
-        # 감마(gamma)에 해당하는 학습 가능한 가중치
-        self.weight = nn.Parameter(torch.ones(d))
 
-    def forward(self, x):
-        # 입력 x의 마지막 차원에 대해 RMS(Root Mean Square)를 계산하고 정규화
-        # x * (1 / sqrt(mean(x^2) + eps)) * weight
-        rsqrt = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return x * rsqrt * self.weight
 
+# ## ---------------------------------------------------------------
+# NTU RGB+D 뼈대 구조를 Shift-GCN을 위한 3개의 인접 행렬로 분해한다.
+# Root: 자기 자신과 연결
+# Close: 몸의 중심에서 바깥으로 연결
+# Far: 밖에서 몸의 중심으로 연결
+# ## ----------------------------------------------------------------
 def get_ntu_shift_decompositions(num_joints):
-    """
-    NTU RGB+D 뼈대 구조를 Shift-GCN을 위한 3개의 인접 행렬로 분해합니다.
-    1. Root: 자기 자신과의 연결 (self-loop)
-    2. Close: 몸의 중심에서 말단으로 향하는 연결
-    3. Far: 말단에서 몸의 중심으로 향하는 연결
-    """
     if num_joints == 50:
         base_num_joints = 25
     else: # 기존 25개 관절 모델과의 호환성 유지
         base_num_joints = num_joints
-        
-    # 관절의 부모-자식 관계 정의 (부모 -> 자식)
+
+
+    # >> 관절의 부모-자식 관계 정의 (부모 -> 자식)
     parent_child_pairs = [
         (20, 1), (1, 0), (20, 2), (2, 3),
         (20, 4), (4, 5), (5, 6), (6, 7), (7, 21), (7, 22),
@@ -42,30 +40,109 @@ def get_ntu_shift_decompositions(num_joints):
         (0, 16), (16, 17), (17, 18), (18, 19)
     ]
 
+
+    # >> 3가지 타입의 인접 행렬을 0으로 초기화한다.
     base_adj_root = np.eye(base_num_joints)
     base_adj_close = np.zeros((base_num_joints, base_num_joints))
     base_adj_far = np.zeros((base_num_joints, base_num_joints))
 
+
+    # >> 정의된 관계에 따라 close와 far 행렬의 값을 1로 설정한다.
     for parent, child in parent_child_pairs:
         base_adj_close[parent, child] = 1
         base_adj_far[child, parent] = 1
 
+
+    # >> 50개 관절의 경우, 25 x 25 행렬을 확장해서 50 x 50 블록 대각 행렬을 생성한다.
     if num_joints == 50:
-        # 50x50 블록 대각 행렬 생성
-        adj_root = np.kron(np.eye(2), base_adj_root) # np.kron은 블록 행렬을 쉽게 만듬
+        # >> np.kron은 두 행렬의 외적을 계산한다.
+        adj_root = np.kron(np.eye(2), base_adj_root)
         adj_close = np.kron(np.eye(2), base_adj_close)
         adj_far = np.kron(np.eye(2), base_adj_far)
     else:
         adj_root, adj_close, adj_far = base_adj_root, base_adj_close, base_adj_far
-        
+
+
+    # >> numpy 배열을 torch 텐서로 변환하여 리스트에 저장한다.    
     decompositions = [
         torch.from_numpy(adj_root).float(),
         torch.from_numpy(adj_close).float(),
         torch.from_numpy(adj_far).float()
     ]
+
+    # >> 3개의 인접 행렬을 하나의 텐서로 쌓아서 반환한다.
     return torch.stack(decompositions)
 
 
+
+
+# ## -----------------------------------------------------
+# Shift-GCN
+# Skeleton 데이터의 공간적 관계를 학습하기 위해
+# 3가지로 분해된 인접 행렬을 사용하여 Graph Convolution을 수행한다.
+# ## ------------------------------------------------------
+class ShiftGraphConvolution(nn.Module):
+    def __init__(self, in_features, out_features, num_joints):
+        super().__init__()
+        # >> Shift-GCN용 인접 행렬 3개를 buffer로 등록한다.
+        self.register_buffer('adj_matrices', get_ntu_shift_decompositions(num_joints))
+        
+
+        # >> 학습 가능한 가중치를 선언한다.
+        self.weight = nn.Parameter(torch.FloatTensor(3, in_features, out_features))
+        
+        # >> Xavier 균등 분포로 가중치를 초기화한다.
+        nn.init.xavier_uniform_(self.weight)
+
+
+    def forward(self, x):
+        # x shape: (N, T, J, C_in)
+        
+        # >> x를 3개의 shift 타입에 적용하기 위해 (3, N, T, J, C_in) 형태로 확장한다.
+        x_expanded = x.unsqueeze(0).repeat(3, 1, 1, 1, 1)
+        
+        # >> 각 shift 타입에 맞는 인접행렬과 Feature를 곱한다. (그래프 shift 연산)
+        # (3, J, J) x (3, N, T, J, C_in) -> (3, N, T, J, C_in)
+        support = torch.einsum('sjj,sntjc->sntjc', self.adj_matrices, x_expanded)
+        
+        # >> 각 shift 타입에 맞는 가중치를 곱한다.
+        # (3, N, T, J, C_in) x (3, C_in, C_out) -> (3, N, T, J, C_out)
+        output = torch.einsum('sntjc,scd->sntjd', support, self.weight)
+        
+        # >> 3개의 결과를 합친다.
+        output = output.sum(dim=0) # (N, T, J, C_out)
+        return output
+
+
+
+
+# ## --------------------------------------------------------
+# RMSNorm
+# 기존의 LayerNorm의 계산 복잡도를 줄이고 성능은 유지한다.
+# Simba 논문에서 참고했다.
+# ## --------------------------------------------------------
+class RMSNorm(nn.Module):
+    def __init__(self, d, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        # >> 감마(gamma)에 해당하는 학습 가능한 가중치이다.
+        self.weight = nn.Parameter(torch.ones(d))
+
+    def forward(self, x):
+        # >> 입력 x의 마지막 차원에 대해 RMS(Root Mean Square)를 계산하고 정규화한다.
+        # x * (1 / sqrt(mean(x^2) + eps)) * weight
+        rsqrt = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return x * rsqrt * self.weight
+    
+
+
+
+
+# ## ------------------------------------------------------------
+# Attention Pooling
+# 시퀀스 데이터의 각 요소에 어텐션 가중치를 부여한다.
+# 중요한 정보만 압축하여 하나의 context vector를 생성한다.
+# ## ------------------------------------------------------------
 class AttentionPooling(nn.Module):
     def __init__(self, d_model):
         super().__init__()
@@ -93,35 +170,7 @@ class AttentionPooling(nn.Module):
         context_vector = (x_reshaped * attention_weights).sum(dim=1)
 
         return context_vector
-
-class ShiftGraphConvolution(nn.Module):
-    # Shift-GCN 레이어
-    def __init__(self, in_features, out_features, num_joints):
-        super().__init__()
-        # Shift-GCN용 인접 행렬 3개 (root, close, far)를 buffer로 등록
-        self.register_buffer('adj_matrices', get_ntu_shift_decompositions(num_joints))
-        
-        # 가중치: 3(shift 타입) x C_in x C_out
-        self.weight = nn.Parameter(torch.FloatTensor(3, in_features, out_features))
-        nn.init.xavier_uniform_(self.weight)
-
-    def forward(self, x):
-        # x shape: (N, T, J, C_in)
-        
-        # x를 (3, N, T, J, C_in) 형태로 확장
-        x_expanded = x.unsqueeze(0).repeat(3, 1, 1, 1, 1)
-        
-        # 각 shift 타입에 맞는 인접행렬과 피처를 곱함 (그래프 shift 연산)
-        # (3, J, J) x (3, N, T, J, C_in) -> (3, N, T, J, C_in)
-        support = torch.einsum('sjj,sntjc->sntjc', self.adj_matrices, x_expanded)
-        
-        # 각 shift 타입에 맞는 가중치를 곱함
-        # (3, N, T, J, C_in) x (3, C_in, C_out) -> (3, N, T, J, C_out)
-        output = torch.einsum('sntjc,scd->sntjd', support, self.weight)
-        
-        # 3개의 결과를 합침
-        output = output.sum(dim=0) # (N, T, J, C_out)
-        return output
+    
 
 
 class PositionalEncoding(nn.Module):
@@ -320,125 +369,6 @@ class GCNTransformerModel(nn.Module):
         motion_summary = self.attention_pool(x)
         combined_summary = torch.cat([motion_summary, pose_vector], dim=-1)
         
-        final_vector = self.fusion_layer(combined_summary)
-        final_vector = self.dropout(final_vector)
-        output = self.fc(final_vector)
-        return output
-class MambaBlock(nn.Module):
-    # GCN 없이 Mamba와 잔차 연결만 포함한 블록
-    def __init__(self, d_model):
-        super().__init__()
-        self.mamba = Mamba(d_model=d_model, d_state=16, d_conv=4, expand=2)
-        self.ln = RMSNorm(d_model)
-        self.residual = nn.Identity() # 입력과 출력의 차원이 같으므로 Identity 사용
-
-    def forward(self, x):
-        # x shape: (N, T, J, C)
-        N, T, J, C = x.shape
-        
-        res = self.residual(x)
-        
-        # Mamba 처리를 위해 shape 변경: (N, T, J, C) -> (N*J, T, C)
-        x_reshaped = x.permute(0, 2, 1, 3).contiguous().view(N * J, T, -1)
-        x_mamba = self.mamba(x_reshaped)
-        x_mamba = self.ln(x_mamba)
-        
-        # 원래 형태로 복원
-        x_out = x_mamba.view(N, J, T, -1).permute(0, 2, 1, 3).contiguous()
-        
-        # 잔차 연결
-        x_out = x_out + res
-        
-        return x_out
-
-class ST_Mamba_Block(nn.Module):
-    # GCN과 Mamba를 하나로 묶고 잔차 연결을 포함한 블록
-    def __init__(self, in_features, out_features, num_joints):
-        super().__init__()
-        self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
-
-        self.norm_gcn = RMSNorm(out_features)
-
-        self.mamba = Mamba(d_model=out_features, d_state=16, d_conv=4, expand=2)
-        self.ln = RMSNorm(out_features)
-
-        if in_features != out_features:
-            self.residual = nn.Sequential(
-                nn.Linear(in_features, out_features),
-                RMSNorm(out_features)
-            )
-        else:
-            self.residual = nn.Identity()
-
-    def forward(self, x): # adj 인자 제거
-        # x shape: (N, T, J, C)
-        N, T, J, C = x.shape
-
-        res = self.residual(x)
-
-        # 1. Shift-GCN
-        x_gcn = self.gcn(x)
-
-        x_gcn_norm = self.norm_gcn(x_gcn)
-
-        # 2. Mamba
-        x_reshaped = x_gcn_norm.permute(0, 2, 1, 3).contiguous().view(N * J, T, -1)
-        x_mamba = self.mamba(x_reshaped)
-        x_mamba = self.ln(x_mamba)
-
-        # 3. 원래 형태로 복원
-        x_out = x_mamba.view(N, J, T, -1).permute(0, 2, 1, 3).contiguous()
-
-        # 4. 잔차 연결
-        x_out = x_out + res
-
-        return x_out
-
-class GCNMambaModel(nn.Module):
-    def __init__(self, num_joints=25, num_coords=config.NUM_COORDS, num_classes=60):
-        super().__init__()
-
-        # 첫 번째 프레임의 좌표를 처리할 인코더
-        self.pose_encoder = nn.Sequential(
-            nn.Linear(num_joints * 3, 128),
-            nn.GELU(),
-            nn.Linear(128, 128)
-        )
-        self.blocks = nn.ModuleList([
-            ST_Mamba_Block(in_features=num_coords, out_features=64, num_joints=num_joints),
-            ST_Mamba_Block(in_features=64, out_features=128, num_joints=num_joints),
-        ])
-
-        self.attention_pool = AttentionPooling(d_model=128)
-        
-        self.fusion_layer = nn.Sequential(
-            nn.Linear(128 * 2, 128),
-            nn.GELU(),
-            RMSNorm(128)
-        )
-        
-        self.dropout = nn.Dropout(p=0.7)
-        self.fc = nn.Linear(128, num_classes)
-
-    def forward(self, motion_features, first_frame_coords):
-        N = motion_features.shape[0]
-        flat_pose = first_frame_coords.view(N, -1)
-        pose_vector = self.pose_encoder(flat_pose)
-        
-        
-        # permute 후 (N, T, 50, C)가 되어 모델에 정상적으로 입력됨
-        x = motion_features.permute(0, 2, 3, 1).contiguous()
-
-        for i, block in enumerate(self.blocks):
-            x = block(x)
-            
-
-        motion_summary = self.attention_pool(x) # shape: (N, 128)
-        
-        combined_summary = torch.cat([motion_summary, pose_vector], dim=-1) # shape: (N, 512)
-        
-
-
         final_vector = self.fusion_layer(combined_summary)
         final_vector = self.dropout(final_vector)
         output = self.fc(final_vector)

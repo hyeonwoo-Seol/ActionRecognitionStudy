@@ -404,7 +404,7 @@ def main():
         plot_history(history, "training_history.png")
 
 
-    # 최종적으로 가장 좋았던 모델의 성능을 출력한다.
+    # >> 최종적으로 가장 좋았던 모델의 성능을 출력한다.
     if os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         best_val_acc = checkpoint['best_acc']
