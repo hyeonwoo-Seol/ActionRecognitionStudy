@@ -142,65 +142,90 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler):
         scaler.update()
 
 
+        # >> 배치 손실, 정확도, 샘플 수를 누적한다.
         running_loss += loss.item() * motion_features.size(0)
         _, predicted = torch.max(outputs.data, 1)
         total_samples += labels.size(0)
         correct_predictions += (predicted == labels).sum().item()
         
+        # >> 진행률 표시줄에 현재 손실과 정확도를 표시한다.
         train_bar.set_postfix(loss=f"{running_loss/total_samples:.4f}", acc=f"{correct_predictions/total_samples:.4f}")
 
+    # >> 에폭의 평균 손실과 정확도를 반환한다.
     return running_loss / total_samples, correct_predictions / total_samples
 
 
+
+
+# ## -----------------------------------------------------------------
+# epcoh 동안 모델의 검증을 수행한다.
+# ## -----------------------------------------------------------------
 def validate_one_epoch(model, loader, criterion, device):
-    # 한 에폭 동안 모델을 검증하는 함수
+    # >> 모델을 평가 모드로 설정한다.
     model.eval()
+
+    # >> 모든 Epoch들의 총 손실, 맞춘 예측 수, 전체 샘플 수를 기록할 변수들이다.
     running_loss = 0.0
     correct_predictions = 0
     total_samples = 0
     
     val_bar = tqdm(loader, desc="[Val]", colour="cyan")
+
+    # >> 기울기 계산을 비활성화하여 검증 속도를 높이고 메모리 사용량을 줄인다.
     with torch.no_grad():
+        # >> 데이터 로더로부터 미니배치를 받아서 검증을 진행한다.
         for motion_features, labels, first_frame_coords in val_bar:
+            # >> 모션 특징, 레이블, 첫 프레임 좌표값을 지정된 device로 이동시킨다.
             motion_features = motion_features.to(device)
             labels = labels.to(device)
             first_frame_coords = first_frame_coords.to(device)
 
+
+            # >> autocast를 사용하여 혼합 정밀도로 순전파를 수행한다.
             with autocast(device_type=device):
+                # >> 순전파를 수행하여 예측 결과를 얻는다.
                 outputs = model(motion_features, first_frame_coords)
+                # >> 손실을 계산한다.
                 loss = criterion(outputs, labels)
             
-            running_loss += loss.item() * motion_features.size(0)
 
+            # >> 배치 손실, 정확도, 샘플 수를 누적한다.
+            running_loss += loss.item() * motion_features.size(0)
             _, predicted = torch.max(outputs.data, 1)
             total_samples += labels.size(0)
             correct_predictions += (predicted == labels).sum().item()
             
             val_bar.set_postfix(loss=f"{running_loss/total_samples:.4f}", acc=f"{correct_predictions/total_samples:.4f}")
-            
+    
+    # >> 에폭의 평균 손실과 정확도를 반환한다.
     return running_loss / total_samples, correct_predictions / total_samples
 
 
 def main():
-    # 시드 고정
+    # >> 재현성을 위해 시드를 고정한다.
     set_seed(config.SEED)
     print(f"Seed fixed to {config.SEED}")
 
+
+    # >> 학습에 사용할 장치(CPU 또는 GPU)를 설정한다.
     device = config.DEVICE
     print(f"Using device: {device}")
     print(f"Dataset path: {config.DATASET_PATH}")
     
-    # 메인 학습 실행 함수
-    # --- 설정값 불러오기 ---
+    
+    # >> 설정값 불러오기
     print(f"Using device: {config.DEVICE}")
     print(f"Dataset path: {config.DATASET_PATH}")
     
-    # --- 데이터 로딩 ---
+
+    # >> 학습용 데이터셋을 초기화한다.
     train_dataset = NTURGBDDataset(
         data_path = config.DATASET_PATH,
         split = 'train',
         max_frames = config.MAX_FRAMES
     )
+
+    # >> 학습용 데이터 로더를 설정한다.
     train_loader = DataLoader(
         train_dataset,
         batch_size = config.BATCH_SIZE,
@@ -208,11 +233,15 @@ def main():
         num_workers = config.NUM_WORKERS,
         pin_memory = config.PIN_MEMORY
     )
+
+    # >> 검증용 데이터셋을 초기화한다.
     val_dataset = NTURGBDDataset(
         data_path = config.DATASET_PATH,
         split = 'val',
         max_frames = config.MAX_FRAMES
     )
+
+    # >> 검증용 데이터 로더를 설정한다.
     val_loader = DataLoader(
         val_dataset,
         batch_size = config.BATCH_SIZE,
@@ -221,23 +250,29 @@ def main():
         pin_memory = config.PIN_MEMORY
     )
 
-    # --- 모델, 손실함수, 옵티마이저 초기화 ---
+    # >> GCN-Transformer 모델을 초기화하고 지정된 장치로 이동시킨다.
     model = GCNTransformerModel(
         num_joints = config.NUM_JOINTS,
         num_coords = config.NUM_COORDS,
         num_classes = config.NUM_CLASSES
     ).to(device)
     
+
+    # >> 손실 함수로 CrossEntropyLoss를 사용하며, 레이블 스무딩을 적용한다.
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+
+    # >> 옵티마이저로 AdamW를 사용하여 가중치 감쇠를 적용한다.
     optimizer = optim.AdamW(
         model.parameters(),
         lr = config.LEARNING_RATE,
         weight_decay = 0.01
     )
+
+    # >> 자동 혼합 정밀도(AMP) 학습을 위한 GradScaler를 초기화한다.
     scaler = GradScaler()
 
-    
-    # 1. 웜업 스케줄러 (Warmup Scheduler)
+    # >> 스케줄러는 변경 예정 ----------------------------------------------------------
+    # >> 1. 웜업 스케줄러 (Warmup Scheduler)
     warmup_scheduler = LinearLR(
         optimizer,
         start_factor = 0.01,
@@ -245,7 +280,7 @@ def main():
         total_iters = config.WARMUP_EPOCHS
     )
 
-    # 2. 메인 스케줄러 (CosineAnnealingWarmRestarts)
+    # >> 2. 메인 스케줄러 (CosineAnnealingWarmRestarts)
     main_scheduler = CosineAnnealingWarmRestarts(
         optimizer,
         T_0 = config.T_0,          # 첫 번째 주기의 길이
@@ -253,59 +288,80 @@ def main():
         eta_min = config.ETA_MIN   # 최소 학습률
     )
 
-    # 3. 두 스케줄러를 순차적으로 연결
+    # >> 3. 두 스케줄러를 순차적으로 연결
     scheduler = SequentialLR(
         optimizer,
         schedulers = [warmup_scheduler, main_scheduler],
         milestones = [config.WARMUP_EPOCHS]
     )
 
-    # 체크포인트 laod 로직
+
+    # >> 학습을 시작할 에폭, 최고 정확도 등 상태 변수를 초기화한다.
     start_epoch = 0
     best_accuracy = 0.0
     last_val_acc = 0.0
+
+
+    # >> 체크포인트 파일이 저장될 경로를 설정한다.
     checkpoint_path = os.path.join(config.SAVE_DIR, "best_model.pth.tar")
 
-    # 조기 종료 변수 추가
+
+    # >> 조기 종료 변수를 추가한다.
     patience = 10
     patience_counter = 0
 
+
+    # >> 학습 및 검증 과정의 손실과 정확도를 기록할 딕셔너리를 초기화한다.
     history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
-    
+
+
+    # >> 저장된 체크포인트 파일이 있으면 학습을 이어서 진행한다.
     if os.path.exists(checkpoint_path):
         print(f"Resuming training from checkpoint '{checkpoint_path}'...")
+
+        # >> 체크포인트 파일을 불러와 모델과 옵티마이저의 상태를 복원한다.
         checkpoint = load_checkpoint(checkpoint_path, model, optimizer, device)
+
+        # >> 마지막으로 저장된 에폭 다음부터 학습을 시작한다.
         start_epoch = checkpoint['epoch']
+
+        # >> 이전 학습에서 기록된 최고 정확도를 불러온다.
         best_accuracy = checkpoint['best_acc']
         last_val_acc = checkpoint.get('last_val_acc', 0.0)
         
+
+        # >> GradScaler의 상태도 복원한다.
         if 'scaler' in checkpoint:
             scaler.load_state_dict(checkpoint['scaler'])
             print("GradScaler state loaded.")
 
-        # 스케줄러의 상태도 복원 (start_epoch 만큼 이동)
+        # >> 현재 시작 에폭에 맞게 스케줄러의 상태를 업데이트한다.
         for _ in range(start_epoch):
             scheduler.step()
         print(f"Resuming from epoch {start_epoch}, with best accuracy {best_accuracy:.4f}")
-    else:
+    else: # >> 체크포인트 파일이 없으면 처음부터 학습을 시작한다.
         print("No checkpoint found, starting training from scratch.")
 
 
     try:
-        # --- 전체 에폭 학습 루프 ---
+        # >> 전체 에폭 학습 루프
         for epoch in range(start_epoch, config.EPOCHS):
             print(f"\n--- Epoch {epoch+1}/{config.EPOCHS} ---")
             
+            # >> 한 에폭 동안 모델을 학습시킨다.
             train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, scaler)
+            
+            # >> 한 에폭 동안 모델을 검증한다.
             val_loss, val_acc = validate_one_epoch(model, val_loader, criterion, device)
             
 
-            # 매 epoch 결과 기록
+            # >> 현재 에폭의 학습 및 검증 결과를 history 딕셔너리에 추가한다.
             history['train_loss'].append(train_loss)
             history['train_acc'].append(train_acc)
             history['val_loss'].append(val_loss)
             history['val_acc'].append(val_acc)
             
+            # >> 학습률 스케줄러를 다음 단계로 업데이트한다.
             current_lr = scheduler.get_last_lr()[0]
             scheduler.step()
             
@@ -313,10 +369,11 @@ def main():
 
             
             
-            # 최고 검증 정확도를 가진 모델 저장
+            # >> 최고 검증 정확도를 가진 모델을 저장한다.
             if val_acc > best_accuracy:
                 print(f"New best accuracy: {val_acc:.4f}! Saving model...")
                 best_accuracy = val_acc
+                # >> 현재 모델의 상태를 체크포인트 파일로 저장한다.
                 save_checkpoint({
                     'epoch': epoch + 1,
                     'state_dict': model.state_dict(),
@@ -331,26 +388,30 @@ def main():
                 print(f"No imporvement in validation accuracy for {patience_counter} epoch(s).")
 
 
-            
+            # >> 조기 종료 카운터가 설정된 patience 값에 도달하면
             if patience_counter >= patience:
                 print(f"Early stopping triggered after {patience} epochs without improvement.")
                 break
-
+    
+    # >> 사용자가 Ctrl+C를 눌러 학습을 중단했을 때 실행된다.
     except KeyboardInterrupt:
-        # 사용자가 Ctrl+C를 눌렀을 때 실행되는 부분
         print("\n\nUser interrupted training. Generating graph with current history...")
-            
-    # 학습이 정상적으로 모두 끝나거나, KeyboardInterrupt로 중단되었을 때 이 코드가 실행됩니다.
+
+
+           
+    # >> 학습이 정상적으로 모두 끝나거나, KeyboardInterrupt로 중단되었을 때 이 코드가 실행된다.
     if history['train_acc']: # 기록이 한 번이라도 되었으면 그래프 생성
         plot_history(history, "training_history.png")
 
-    # 최종적으로 가장 좋았던 모델의 성능을 출력합니다.
+
+    # 최종적으로 가장 좋았던 모델의 성능을 출력한다.
     if os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         best_val_acc = checkpoint['best_acc']
         print(f"\nBest Validation Accuracy achieved: {best_val_acc:.4f} ({best_val_acc*100:.2f}%)")
     
     print("\nTraining finished.")
-    
+
+
 if __name__ == '__main__':
     main()
