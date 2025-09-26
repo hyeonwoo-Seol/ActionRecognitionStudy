@@ -146,25 +146,25 @@ class RMSNorm(nn.Module):
 class AttentionPooling(nn.Module):
     def __init__(self, d_model):
         super().__init__()
-        # 입력 특징(d_model)을 받아 1개의 어텐션 점수로 변환하는 선형 레이어
+        # >> 입력 특징(d_model)을 받아 1개의 어텐션 점수로 변환하는 선형 레이어
         self.attention_scorer = nn.Linear(d_model, 1)
 
     def forward(self, x):
         # x shape: (N, T, J, C)
         N, T, J, C = x.shape
 
-        # 1. 어텐션 점수 계산을 위해 (N, T*J, C) 형태로 변경
+        # >> 1. 어텐션 점수 계산을 위해 (N, T*J, C) 형태로 변경한다.
         x_reshaped = x.view(N, T * J, C)
 
-        # 2. 각 위치(T*J개)의 중요도를 계산
+        # >> 2. 각 위치(T*J개)의 중요도를 계산한다.
         # (N, T*J, C) -> (N, T*J, 1)
         attention_logits = self.attention_scorer(x_reshaped)
 
-        # 3. Softmax를 적용하여 합이 1인 어텐션 가중치 생성
+        # >> 3. Softmax를 적용하여 합이 1인 어텐션 가중치 생성한다.
         # (N, T*J, 1)
         attention_weights = torch.softmax(attention_logits, dim=1)
 
-        # 4. 가중치와 원래 특징을 곱하여 가중 합(weighted sum) 계산
+        # >> 4. 가중치와 원래 특징을 곱하여 가중 합(weighted sum) 계산한다.
         # (N, T*J, C) * (N, T*J, 1) -> (N, T*J, C)
         # .sum(dim=1)을 통해 (N, C) 형태의 최종 요약 벡터 생성
         context_vector = (x_reshaped * attention_weights).sum(dim=1)
@@ -172,44 +172,66 @@ class AttentionPooling(nn.Module):
         return context_vector
     
 
-
+# ## ------------------------------------------------------------
+# Positional Encoding
+# Transformer는 순서 정보를 다룰 수 없으므로,
+# sin, cos 함수를 이용해 각 토큰의 위치 정보를 더해준다.
+# ## ------------------------------------------------------------
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = config.MAX_FRAMES):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
+        # >> 위치 인덱스이다.
         position = torch.arange(max_len).unsqueeze(1)
+        
+        # >> 위치 인코딩 계산을 위한 분모 항이다.
         div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
         
+        # >> (1, max_len, d_model) 크기의 위치 인코딩 행렬이다.
         pe = torch.zeros(1, max_len, d_model)
+
+        # >> 짝수 인덱스에 sin 함수를 적용한다.
         pe[0, :, 0::2] = torch.sin(position * div_term)
+
+        # >> 홀수 인덱스에 cos 함수를 적용한다.
         pe[0, :, 1::2] = torch.cos(position * div_term)
+
+        # >> pe를 학습되지 않는 버퍼로 등록한다.
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        """
-        x: (N, T, C) 형태의 텐서에 위치 정보를 더해줍니다.
-        """
+        # >> 입력 x에 위치 인코딩을 더한다.
         x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
 
+
+
+
+# ## --------------------------------------------------------------------
+# Standard Transformer Block
+# Shift-GCN으로 공간적 특징을 추출한 후,
+# 시간과 공간을 하나로 합친 시퀀스에 대해 표준 Transformer 어텐션을 적용한다.
+# ## --------------------------------------------------------------------
 class StandardTransformerBlock(nn.Module):
     def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
         super().__init__()
-        # 1. 공간적 특징을 위한 Shift-GCN
+        # >> 1. 공간적 특징을 위한 Shift-GCN이다.
         self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
         self.norm_gcn = RMSNorm(out_features)
 
-        # 2. 표준 Transformer 인코더
-        # 공간과 시간 차원을 합친 전체 시퀀스에 대해 어텐션을 수행
+
+        # >> 2. 표준 Transformer 인코더이다.
+        # >> 공간과 시간 차원을 합친 전체 시퀀스에 대해 어텐션을 수행한다.
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
             activation='gelu', batch_first=True, dropout=0.1
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
         self.norm_transformer = RMSNorm(out_features)
-        
-        # 입력과 출력의 채널 수가 다를 경우를 위한 잔차 연결
+
+
+        # >> 입력과 출력의 채널 수가 다를 경우를 위한 잔차 연결 코드이다.
         if in_features != out_features:
             self.residual = nn.Sequential(
                 nn.Linear(in_features, out_features),
@@ -218,41 +240,58 @@ class StandardTransformerBlock(nn.Module):
         else:
             self.residual = nn.Identity()
 
+
     def forward(self, x):
         # x shape: (N, T, J, C)
         N, T, J, C_in = x.shape
         C_out = self.gcn.weight.shape[-1]
         
+
+        # >> 잔차 연결을 위해 초기 입력을 저장한다.
         res = self.residual(x)
         
-        # --- 1. 공간 그래프 컨볼루션 ---
+
+        # >> 1. 공간 그래프 컨볼루션이다.
         x_gcn = self.gcn(x)
         x_gcn = self.norm_gcn(x_gcn)
 
-        # --- 2. 표준 Transformer 어텐션 ---
-        # (N, T, J, C) -> (N, T*J, C) 형태로 펼쳐서 하나의 시퀀스로 만듦
+
+        # >> 2. 표준 Transformer 어텐션이다.
+        # >> (N, T, J, C) -> (N, T*J, C) 형태로 펼쳐서 하나의 시퀀스로 만든다.
         x_flattened = x_gcn.contiguous().view(N, T * J, C_out)
         
-        # Transformer 인코더는 (N, SeqLen, C) 형태의 입력을 받음
+
+        # >> Transformer 인코더는 (N, SeqLen, C) 형태의 입력을 받는다.
         x_attn = self.transformer_encoder(x_flattened)
         x_attn = self.norm_transformer(x_attn)
         
-        # 원래 형태로 복원: (N, T*J, C) -> (N, T, J, C)
+
+        # >> 원래 형태로 복원한다. (N, T*J, C) -> (N, T, J, C)
         x_unflattened = x_attn.view(N, T, J, C_out)
         
-        # --- 3. 최종 잔차 연결 ---
+
+        # >> 3. 최종 잔차 연결을 한다.
         x_final = x_unflattened + res
         
         return x_final
 
+
+
+
+# ## -------------------------------------------------------------------------
+# Spatial-Temporal Transformer Block
+# Shift-GCN 이후, 공간(Spatial) 축과 시간(Temporal) 축에 대해
+# 순차적으로 Transformer 어텐션을 적용하여 시공간 특징을 분리하여 학습한다.
+# ## -------------------------------------------------------------------------
 class ST_Transformer_Block(nn.Module):
     def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
         super().__init__()
-        # 1. 공간적 특징을 위한 Shift-GCN (기존과 동일)
+        # >> 1. 공간적 특징을 위한 Shift-GCN이다.
         self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
         self.norm_gcn = RMSNorm(out_features)
 
-        # 2. 공간적 어텐션을 위한 Transformer 인코더
+
+        # >> 2. 공간적 어텐션을 위한 Transformer 인코더이다.
         spatial_encoder_layer = nn.TransformerEncoderLayer(
             d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
             activation='gelu', batch_first=True, dropout=0.1
@@ -260,7 +299,8 @@ class ST_Transformer_Block(nn.Module):
         self.spatial_transformer_encoder = nn.TransformerEncoder(spatial_encoder_layer, num_layers=1)
         self.norm_spatial = RMSNorm(out_features)
 
-        # 3. 시간적 어텐션을 위한 Transformer 인코더
+
+        # >> 3. 시간적 어텐션을 위한 Transformer 인코더이다.
         temporal_encoder_layer = nn.TransformerEncoderLayer(
             d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
             activation='gelu', batch_first=True, dropout=0.1
@@ -268,7 +308,8 @@ class ST_Transformer_Block(nn.Module):
         self.temporal_transformer_encoder = nn.TransformerEncoder(temporal_encoder_layer, num_layers=1)
         self.norm_temporal = RMSNorm(out_features)
         
-        # 입력과 출력의 채널 수가 다를 경우를 위한 잔차 연결
+
+        # >> 입력과 출력의 채널 수가 다를 경우를 위한 잔차 연결이다.
         if in_features != out_features:
             self.residual = nn.Sequential(
                 nn.Linear(in_features, out_features),
@@ -277,98 +318,144 @@ class ST_Transformer_Block(nn.Module):
         else:
             self.residual = nn.Identity()
 
+
     def forward(self, x):
         # x shape: (N, T, J, C)
         N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.gcn.weight.shape[-1]
         
+        # >> 잔차 연결을 위해 초기 입력을 저장한다.
         res_main = self.residual(x)
         
-        # --- 1. 공간 그래프 컨볼루션 ---
+
+        # >> 1. 공간 그래프 컨볼루션이다.
         x_gcn = self.gcn(x)
         x_gcn = self.norm_gcn(x_gcn)
 
-        # --- 2. 공간 Transformer 어텐션 ---
-        # 각 프레임(T) 내에서 관절(J)들 간의 관계를 학습
-        # (N, T, J, C) -> (N*T, J, C) 형태로 변경하여 J를 시퀀스 길이로 취급
+
+        # >> 2. 공간 Transformer 어텐션이다.
+        # >> 각 프레임(T) 내에서 관절(J)들 간의 관계를 학습한다.
+        # >> (N, T, J, C) -> (N*T, J, C) 형태로 변경하여 J를 시퀀스 길이로 취급한다.
         res_spatial = x_gcn
         x_reshaped_spatial = x_gcn.contiguous().view(N * T, J, C_out)
         x_spatial_attn = self.spatial_transformer_encoder(x_reshaped_spatial)
         x_spatial_attn = self.norm_spatial(x_spatial_attn)
-        # 원래 형태로 복원: (N*T, J, C) -> (N, T, J, C)
+        
+
+        # >> 원래 형태로 복원한다. (N*T, J, C) -> (N, T, J, C)
         x_spatial_out = x_spatial_attn.view(N, T, J, C_out)
         x_spatial_out = x_spatial_out + res_spatial # 공간 내 잔차 연결
 
-        # --- 3. 시간 Transformer 어텐션 ---
-        # 각 관절(J)의 시간(T)적 흐름에 따른 관계를 학습
-        # (N, T, J, C) -> (N*J, T, C) 형태로 변경하여 T를 시퀀스 길이로 취급
+
+        # >> 3. 시간 Transformer 어텐션이다.
+        # >> 각 관절(J)의 시간(T)적 흐름에 따른 관계를 학습한다.
+        # >> (N, T, J, C) -> (N*J, T, C) 형태로 변경하여 T를 시퀀스 길이로 취급한다.
         res_temporal = x_spatial_out
         x_reshaped_temporal = x_spatial_out.permute(0, 2, 1, 3).contiguous().view(N * J, T, C_out)
         x_temporal_attn = self.temporal_transformer_encoder(x_reshaped_temporal)
         x_temporal_attn = self.norm_temporal(x_temporal_attn)
-        # 원래 형태로 복원: (N*J, T, C) -> (N, T, J, C)
+        
+
+        # >> 원래 형태로 복원한다. (N*J, T, C) -> (N, T, J, C)
         x_temporal_out = x_temporal_attn.view(N, J, T, C_out).permute(0, 2, 1, 3).contiguous()
         x_temporal_out = x_temporal_out + res_temporal # 시간 내 잔차 연결
         
-        # --- 4. 최종 잔차 연결 ---
+
+        # >> 4. 최종 잔차 연결을 한다.
         x_final = x_temporal_out + res_main
         
         return x_final
 
+# ## -------------------------------------------------------------------------
+# GCN-Transformer 최종 모델
+# 정적인 자세 정보와 동적인 움직임 정보를 결합하여 최종 분류를 수행한다.
+# ## -------------------------------------------------------------------------
 class GCNTransformerModel(nn.Module):
     def __init__(self, num_joints=50, num_coords=config.NUM_COORDS, num_classes=60):
         super().__init__()
 
+        # >> 첫 프레임의 관절 좌표를 이용해 정적인 자세 벡터를 생성한다.
         self.pose_encoder = nn.Sequential(
             nn.Linear(num_joints * 3, 128),
             nn.GELU(),
             nn.Linear(128, 128)
         )
 
+        
+        # >> 입력 좌표를 64차원 특징 벡터로 변환한다.
         self.input_projection = nn.Linear(num_coords, 64)
         
+
+        # >> 시퀀스에 위치 정보를 더해주는 Positional Encoding이다.
         self.pos_encoder = PositionalEncoding(
             d_model=64, 
             max_len=config.MAX_FRAMES * config.NUM_JOINTS
         )
         
+
+        # >> GCN과 Transformer를 결합한 블록이다.
         self.blocks = nn.ModuleList([
             StandardTransformerBlock(in_features=64, out_features=64, num_joints=num_joints),
             StandardTransformerBlock(in_features=64, out_features=128, num_joints=num_joints),
-            # StandardTransformerBlock(in_features=128, out_features=256, num_joints=num_joints)
         ])
 
+
+        # >> 시퀀스 전체 정보를 하나의 벡터로 요약하는 Attention Pooling이다.
         self.attention_pool = AttentionPooling(d_model=128)
         
+
+        # >> 움직임 요약 벡터와 자세 벡터를 결합하는 층이다.
         self.fusion_layer = nn.Sequential(
             nn.Linear(128 * 2, 128),
             nn.GELU(),
             RMSNorm(128)
         )
         
+
+        # >> 과적합 방지를 위한 Dropout이다.
         self.dropout = nn.Dropout(p=0.5)
+        # >> 최종 클래스를 분류하는 층이다.
         self.fc = nn.Linear(128, num_classes)
+
 
     def forward(self, motion_features, first_frame_coords):
         N, _, T, J = motion_features.shape
         C_proj = 64 # self.input_projection의 출력 차원
         
+
+        # >> 1. 정적 자세 벡터를 생성한다.
         flat_pose = first_frame_coords.view(N, -1)
         pose_vector = self.pose_encoder(flat_pose)
         
+
+        # >> 2. 움직임 특징을 처리한다.
         x = motion_features.permute(0, 2, 3, 1).contiguous()
+        
+        # >> 각 관절의 좌표 정보를 64차원 벡터로 임베딩한다.
         x = self.input_projection(x) # (N, T, J, 64)
 
+
+        # >> 3. 위치 인코딩을 추가한다.
         x_flat = x.view(N, T * J, C_proj)
         x_flat_pe = self.pos_encoder(x_flat)
-        x = x_flat_pe.view(N, T, J, C_proj) # 다시 원래 형태로 복원
+
+        # >> 원래 형태로 복원한다.
+        x = x_flat_pe.view(N, T, J, C_proj)
         
+
+        # >> 4. GCN-Transformer 블록을 통과시킨다.
         x = self.blocks[0](x) # (64 -> 64)
         x = self.blocks[1](x) # (64 -> 128)
-        # x = self.blocks[2](x)
         
+
+        # >> 5. 동적 움직임을 요약한다.
         motion_summary = self.attention_pool(x)
+        
+        
+        # >> 6. 정적 자세 정보와 동적 자세 정보를 결합한다.
         combined_summary = torch.cat([motion_summary, pose_vector], dim=-1)
         
+
+        # >> 7. 최종 분류를 수행한다.
         final_vector = self.fusion_layer(combined_summary)
         final_vector = self.dropout(final_vector)
         output = self.fc(final_vector)
