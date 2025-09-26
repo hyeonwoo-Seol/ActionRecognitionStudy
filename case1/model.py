@@ -229,6 +229,7 @@ class StandardTransformerBlock(nn.Module):
             activation='gelu', batch_first=True, dropout=0.1
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
+        self.norm_gcn = RMSNorm(out_features)
         self.norm_transformer = RMSNorm(out_features)
 
 
@@ -297,6 +298,7 @@ class ST_Transformer_Block(nn.Module):
         if self.use_gcn:
             self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
 
+        self.norm_gcn = RMSNorm(out_features)
 
         # >> 2. 공간적 어텐션을 위한 Transformer 인코더이다.
         spatial_encoder_layer = nn.TransformerEncoderLayer(
@@ -331,7 +333,7 @@ class ST_Transformer_Block(nn.Module):
         N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.gcn.weight.shape[-1]
         
         # >> 잔차 연결을 위해 초기 입력을 저장한다.
-        res_main = self.residual(x)
+        res = self.residual(x)
         
         if self.use_gcn:
             x_processed = self.gcn(x)

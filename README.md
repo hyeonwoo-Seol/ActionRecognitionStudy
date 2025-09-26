@@ -11,6 +11,7 @@
 
 ```
 # No nomalize by bone length in preprocess_ntu_data.py
+# python train.py --scheduler cosine_decay
 
 # >> 재현성을 위해 시드 설정
 SEED = 42
