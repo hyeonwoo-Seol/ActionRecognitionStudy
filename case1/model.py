@@ -373,7 +373,7 @@ class ST_Transformer_Block(nn.Module):
         
 
         # >> 4. 최종 잔차 연결을 한다.
-        x_final = x_temporal_out + res_main
+        x_final = x_temporal_out + res
         
         return x_final
 
