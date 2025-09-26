@@ -214,13 +214,14 @@ class PositionalEncoding(nn.Module):
 # 시간과 공간을 하나로 합친 시퀀스에 대해 표준 Transformer 어텐션을 적용한다.
 # ## --------------------------------------------------------------------
 class StandardTransformerBlock(nn.Module):
-    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
+    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256, use_gcn=True):
         super().__init__()
-        # >> 1. 공간적 특징을 위한 Shift-GCN이다.
-        self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
-        self.norm_gcn = RMSNorm(out_features)
-
-
+        # >> 1. Shift-GCN 사용 여부를 결정한다.
+        self.use_gcn = use_gcn
+        if self.use_gcn:
+            self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
+        
+        
         # >> 2. 표준 Transformer 인코더이다.
         # >> 공간과 시간 차원을 합친 전체 시퀀스에 대해 어텐션을 수행한다.
         encoder_layer = nn.TransformerEncoderLayer(
@@ -249,11 +250,16 @@ class StandardTransformerBlock(nn.Module):
 
         # >> 잔차 연결을 위해 초기 입력을 저장한다.
         res = self.residual(x)
-        
 
-        # >> 1. 공간 그래프 컨볼루션이다.
-        x_gcn = self.gcn(x)
-        x_gcn = self.norm_gcn(x_gcn)
+
+        # >> 1. use_gcn 플래그에 따라 GCN을 실행하거나 건너뛴다.
+        if self.use_gcn:
+            x_processed = self.gcn(x) 
+        else:
+            x_processed = res # GCN을 사용하지 않으면 입력을 그대로 사용한다.
+
+        x_gcn = self.norm_gcn(x_processed)
+        
 
 
         # >> 2. 표준 Transformer 어텐션이다.
@@ -284,11 +290,12 @@ class StandardTransformerBlock(nn.Module):
 # 순차적으로 Transformer 어텐션을 적용하여 시공간 특징을 분리하여 학습한다.
 # ## -------------------------------------------------------------------------
 class ST_Transformer_Block(nn.Module):
-    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
+    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256, use_gcn=True):
         super().__init__()
-        # >> 1. 공간적 특징을 위한 Shift-GCN이다.
-        self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
-        self.norm_gcn = RMSNorm(out_features)
+        # >> 1. Shift-GCN 사용 여부를 결정한다.
+        self.use_gcn = use_gcn
+        if self.use_gcn:
+            self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
 
 
         # >> 2. 공간적 어텐션을 위한 Transformer 인코더이다.
@@ -326,11 +333,14 @@ class ST_Transformer_Block(nn.Module):
         # >> 잔차 연결을 위해 초기 입력을 저장한다.
         res_main = self.residual(x)
         
+        if self.use_gcn:
+            x_processed = self.gcn(x)
+        else:
+            x_processed = res
 
-        # >> 1. 공간 그래프 컨볼루션이다.
-        x_gcn = self.gcn(x)
-        x_gcn = self.norm_gcn(x_gcn)
-
+        x_gcn = self.norm_gcn(x_processed)
+        
+        
 
         # >> 2. 공간 Transformer 어텐션이다.
         # >> 각 프레임(T) 내에서 관절(J)들 간의 관계를 학습한다.
@@ -370,7 +380,14 @@ class ST_Transformer_Block(nn.Module):
 # 정적인 자세 정보와 동적인 움직임 정보를 결합하여 최종 분류를 수행한다.
 # ## -------------------------------------------------------------------------
 class GCNTransformerModel(nn.Module):
-    def __init__(self, num_joints=50, num_coords=config.NUM_COORDS, num_classes=60):
+    def __init__(self,
+                 num_joints = config.NUM_JOINTS,
+                 num_coords = config.NUM_COORDS,
+                 num_classes = config.NUM_CLASSES,
+                 block_type ='standard',
+                 layer_dims = [64, 64, 128],
+                 use_gcn=True
+                 ):
         super().__init__()
 
         # >> 첫 프레임의 관절 좌표를 이용해 정적인 자세 벡터를 생성한다.
@@ -381,31 +398,54 @@ class GCNTransformerModel(nn.Module):
         )
 
         
-        # >> 입력 좌표를 64차원 특징 벡터로 변환한다.
-        self.input_projection = nn.Linear(num_coords, 64)
+        # >> 입력 좌표를 layer_dims의 첫 번째 차원으로 변환한다.
+        self.input_projection = nn.Linear(num_coords, layer_dims[0])
         
 
         # >> 시퀀스에 위치 정보를 더해주는 Positional Encoding이다.
         self.pos_encoder = PositionalEncoding(
-            d_model=64, 
+            d_model=layer_dims[0],
             max_len=config.MAX_FRAMES * config.NUM_JOINTS
         )
         
+        # >> 동적으로 transformer 블록을 생성한다.
+        self.blocks = nn.ModuleList()
 
-        # >> GCN과 Transformer를 결합한 블록이다.
-        self.blocks = nn.ModuleList([
-            StandardTransformerBlock(in_features=64, out_features=64, num_joints=num_joints),
-            StandardTransformerBlock(in_features=64, out_features=128, num_joints=num_joints),
-        ])
+        # >> layer_dims 리스트를 기반으로 반복문을 실행하여 블록을 쌓는다.
+        for i in range(len(layer_dims) - 1):
+            in_dim = layer_dims[i]
+            out_dim = layer_dims[i+1]
+            
+            if block_type == 'standard':
+                block = StandardTransformerBlock(
+                    in_features=in_dim, 
+                    out_features=out_dim, 
+                    num_joints=num_joints,
+                    use_gcn=use_gcn
+                )
+            elif block_type == 'st':
+                block = ST_Transformer_Block(
+                    in_features=in_dim, 
+                    out_features=out_dim, 
+                    num_joints=num_joints,
+                    use_gcn=use_gcn
+                )
+            else:
+                raise ValueError(f"Unknown block_type: {block_type}")
+            
+            self.blocks.append(block)
 
+        # >> 출력 부분 처리
+        final_dim = layer_dims[-1]
 
         # >> 시퀀스 전체 정보를 하나의 벡터로 요약하는 Attention Pooling이다.
-        self.attention_pool = AttentionPooling(d_model=128)
+        self.attention_pool = AttentionPooling(d_model=final_dim)
+        
         
 
-        # >> 움직임 요약 벡터와 자세 벡터를 결합하는 층이다.
+        # >> 움직임 요약 벡터와 자세 벡터(128)를 결합하는 층이다.
         self.fusion_layer = nn.Sequential(
-            nn.Linear(128 * 2, 128),
+            nn.Linear(final_dim + 128, 128),
             nn.GELU(),
             RMSNorm(128)
         )
@@ -419,7 +459,7 @@ class GCNTransformerModel(nn.Module):
 
     def forward(self, motion_features, first_frame_coords):
         N, _, T, J = motion_features.shape
-        C_proj = 64 # self.input_projection의 출력 차원
+        C_proj = self.input_projection.out_features
         
 
         # >> 1. 정적 자세 벡터를 생성한다.
@@ -443,8 +483,8 @@ class GCNTransformerModel(nn.Module):
         
 
         # >> 4. GCN-Transformer 블록을 통과시킨다.
-        x = self.blocks[0](x) # (64 -> 64)
-        x = self.blocks[1](x) # (64 -> 128)
+        for block in self.blocks:
+            x = block(x)
         
 
         # >> 5. 동적 움직임을 요약한다.

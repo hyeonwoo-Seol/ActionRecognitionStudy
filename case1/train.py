@@ -19,18 +19,72 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
-from torch.optim.lr_scheduler import LinearLR, CosineAnnealingWarmRestarts, SequentialLR
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, CosineAnnealingWarmRestarts, SequentialLR
 from tqdm import tqdm
 import os
 import random
 import numpy as np
 import sys
 import matplotlib.pyplot as plt
+import argparse
 
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
 from model import GCNTransformerModel
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
+
+
+
+# ## ----------------------------------------------------
+# 커맨드 라인 인자에 따라 스케줄러를 반환한다.
+# 사용 방법은 다음과 같다.
+# python train.py 는 cosine_decay가 기본값이다.
+# python train.py --scheduler cosine_decay
+# python train.py --scheduler cosine_restarts
+# ## ----------------------------------------------------
+def get_scheduler(optimizer, scheduler_name, total_epochs, warmup_epochs):
+    # >> optimizer: 적용할 옵티마이저
+    # >> scheduler_name: 사용할 스케줄러 이름 ('cosine_decay' 또는 'cosine_restarts')
+    # >> total_epochs: 총 학습 에폭 수
+    # >> warmup_epochs: 웜업 에폭 수
+    print(f"Using '{scheduler_name}' scheduler.")
+
+    # >> 1. 웜업 스케줄러는 공통으로 사용한다.
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=0.01,
+        end_factor=1.0,
+        total_iters=warmup_epochs
+    )
+
+    
+    # >> 2. 선택된 이름에 따라 메인 스케줄러를 설정한다.
+    if scheduler_name == 'cosine_decay':
+        # >> 옵션 1: 워밍업 + 재시작 없는 코사인 감쇠 (CosineAnnealingLR)
+        main_scheduler = CosineAnnealingLR(
+            optimizer,
+            T_max=total_epochs - warmup_epochs,
+            eta_min=config.ETA_MIN
+        )
+    elif scheduler_name == 'cosine_restarts':
+        # >> 옵션 2: 워밍업 + 재시작 있는 코사인 감쇠 (CosineAnnealingWarmRestarts)
+        main_scheduler = CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=config.T_0,
+            T_mult=config.T_MULT,
+            eta_min=config.ETA_MIN
+        )
+    else:
+        # >> 잘못된 이름이 입력되면 에러를 발생시킨다.
+        raise ValueError(f"Unknown scheduler: {scheduler_name}")
+
+    # >> 3. 두 스케줄러를 순차적으로 연결하여 최종 스케줄러를 반환한다.
+    return SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, main_scheduler],
+        milestones=[warmup_epochs]
+    )
+
 
 
 
@@ -202,6 +256,18 @@ def validate_one_epoch(model, loader, criterion, device):
 
 
 def main():
+    # >> argparse를 사용하여 커맨드 라인 인자를 설정한다.
+    parser = argparse.ArgumentParser(description="Train GCN-Transformer model.")
+    parser.add_argument(
+        '--scheduler', 
+        type=str, 
+        default='cosine_decay', 
+        choices=['cosine_decay', 'cosine_restarts'],
+        help="Scheduler to use: 'cosine_decay' or 'cosine_restarts'"
+    )
+    args = parser.parse_args()
+
+
     # >> 재현성을 위해 시드를 고정한다.
     set_seed(config.SEED)
     print(f"Seed fixed to {config.SEED}")
@@ -251,10 +317,14 @@ def main():
     )
 
     # >> GCN-Transformer 모델을 초기화하고 지정된 장치로 이동시킨다.
+    # >> block_type, layer_dims, use_gcn를 설정한다.
+    # >> block_type='st' : Shift-GCN + ST-Transformer
+    # >> block_type='standard' : Shift-GCN + Transformer
+    # >> gcn 사용 여부는 use_gcn을 True, False로 지정한다.
     model = GCNTransformerModel(
-        num_joints = config.NUM_JOINTS,
-        num_coords = config.NUM_COORDS,
-        num_classes = config.NUM_CLASSES
+        block_type='st',
+        layer_dims=[64, 128],
+        use_gcn=True
     ).to(device)
     
 
@@ -271,28 +341,13 @@ def main():
     # >> 자동 혼합 정밀도(AMP) 학습을 위한 GradScaler를 초기화한다.
     scaler = GradScaler()
 
-    # >> 스케줄러는 변경 예정 ----------------------------------------------------------
-    # >> 1. 웜업 스케줄러 (Warmup Scheduler)
-    warmup_scheduler = LinearLR(
+    
+    # >> get_scheduler 함수를 호출하여 스케줄러를 가져온다.
+    scheduler = get_scheduler(
         optimizer,
-        start_factor = 0.01,
-        end_factor = 1.0,
-        total_iters = config.WARMUP_EPOCHS
-    )
-
-    # >> 2. 메인 스케줄러 (CosineAnnealingWarmRestarts)
-    main_scheduler = CosineAnnealingWarmRestarts(
-        optimizer,
-        T_0 = config.T_0,          # 첫 번째 주기의 길이
-        T_mult = config.T_MULT,    # 주기가 반복될수록 길이 T_i에 곱해줄 값
-        eta_min = config.ETA_MIN   # 최소 학습률
-    )
-
-    # >> 3. 두 스케줄러를 순차적으로 연결
-    scheduler = SequentialLR(
-        optimizer,
-        schedulers = [warmup_scheduler, main_scheduler],
-        milestones = [config.WARMUP_EPOCHS]
+        scheduler_name=args.scheduler, # 커맨드 라인에서 받은 스케줄러 이름
+        total_epochs=config.EPOCHS,
+        warmup_epochs=config.WARMUP_EPOCHS
     )
 
 

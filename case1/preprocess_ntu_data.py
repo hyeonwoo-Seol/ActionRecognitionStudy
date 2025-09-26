@@ -229,7 +229,8 @@ def calculate_and_save_stats():
 
 
         # >> 뼈 길이 정규화
-        normalized_coords = _normalize_by_bone_length(coords)
+        # >> 실험을 위해 사용하지 않는다.
+        # normalized_coords = _normalize_by_bone_length(coords)
 
         # >> 다운샘플링
         downsampled_coords = normalized_coords[::2, :, :]
@@ -314,13 +315,14 @@ def main():
 
 
             # >> 데이터를 전처리한다.
-            # 뼈길이 정규화
-            normalized_coords = _normalize_by_bone_length(coords)
+            # >> 뼈길이 정규화
+            # >> 실험을 위해 사용하지 않는다.
+            # normalized_coords = _normalize_by_bone_length(coords)
 
-            # 다운샘플링
+            # >> 다운샘플링
             normalized_coords = normalized_coords[::2, :, :, :]
 
-            # 특징 계산
+            # >> 특징 계산
             raw_features = _calculate_features(normalized_coords)
 
 
