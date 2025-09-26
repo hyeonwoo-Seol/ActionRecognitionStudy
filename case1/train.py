@@ -317,25 +317,21 @@ def main():
     )
 
     # >> GCN-Transformer 모델을 초기화하고 지정된 장치로 이동시킨다.
-    # >> block_type, layer_dims, use_gcn를 설정한다.
-    # >> block_type='st' : Shift-GCN + ST-Transformer
-    # >> block_type='standard' : Shift-GCN + Transformer
-    # >> gcn 사용 여부는 use_gcn을 True, False로 지정한다.
     model = GCNTransformerModel(
-        block_type='st',
-        layer_dims=[64, 128],
-        use_gcn=True
+        block_type = config.BLOCK_TYPE,
+        layer_dims = config.LAYER_DIMS,
+        use_gcn = config.USE_GCN
     ).to(device)
     
 
     # >> 손실 함수로 CrossEntropyLoss를 사용하며, 레이블 스무딩을 적용한다.
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    criterion = nn.CrossEntropyLoss(label_smoothing=config.LABEL_SMOOTHING)
 
     # >> 옵티마이저로 AdamW를 사용하여 가중치 감쇠를 적용한다.
     optimizer = optim.AdamW(
         model.parameters(),
         lr = config.LEARNING_RATE,
-        weight_decay = 0.01
+        weight_decay = config.ADAMW_WEIGHT_DECAY
     )
 
     # >> 자동 혼합 정밀도(AMP) 학습을 위한 GradScaler를 초기화한다.
@@ -362,12 +358,9 @@ def main():
 
 
     # >> 조기 종료 변수를 추가한다.
-    patience = 10
+    patience = config.PATIENCE
     patience_counter = 0
 
-
-    # >> 학습 및 검증 과정의 손실과 정확도를 기록할 딕셔너리를 초기화한다.
-    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
 
 
     # >> 저장된 체크포인트 파일이 있으면 학습을 이어서 진행한다.
@@ -383,7 +376,8 @@ def main():
         # >> 이전 학습에서 기록된 최고 정확도를 불러온다.
         best_accuracy = checkpoint['best_acc']
         last_val_acc = checkpoint.get('last_val_acc', 0.0)
-        
+
+        history = checkpoint.get('history', {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []})
 
         # >> GradScaler의 상태도 복원한다.
         if 'scaler' in checkpoint:
@@ -396,6 +390,8 @@ def main():
         print(f"Resuming from epoch {start_epoch}, with best accuracy {best_accuracy:.4f}")
     else: # >> 체크포인트 파일이 없으면 처음부터 학습을 시작한다.
         print("No checkpoint found, starting training from scratch.")
+        # >> 학습 및 검증 과정의 손실과 정확도를 기록할 딕셔너리를 초기화한다.
+        history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
 
 
     try:
@@ -435,6 +431,7 @@ def main():
                     'optimizer': optimizer.state_dict(),
                     'best_acc': best_accuracy,
                     'scaler': scaler.state_dict(),
+                    'history': history,
                     'last_val_acc': last_val_acc
                 }, directory=config.SAVE_DIR, filename="best_model.pth.tar")
                 patience_counter = 0 # 최고 기록 경신 시 카운터 초기화

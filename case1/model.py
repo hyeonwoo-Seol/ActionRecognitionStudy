@@ -452,7 +452,7 @@ class GCNTransformerModel(nn.Module):
         
 
         # >> 과적합 방지를 위한 Dropout이다.
-        self.dropout = nn.Dropout(p=0.5)
+        self.dropout = nn.Dropout(p=config.DROPOUT)
         # >> 최종 클래스를 분류하는 층이다.
         self.fc = nn.Linear(128, num_classes)
 

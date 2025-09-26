@@ -116,8 +116,8 @@ class NTURGBDDataset(Dataset):
         
         # >> 2. (훈련 시) 데이터 증강을 원본 특징에 바로 적용
         if self.split == 'train':
-            # >> 2-1. 임의 회전 (50% 확률)
-            if np.random.rand() > 0.5:
+            # >> 2-1. 임의 회전
+            if np.random.rand() > config.PROB:
                 # >> -10도에서 +10도 사이의 각도를 무작위로 선택한다.
                 angle = np.random.uniform(-10, 10) * np.pi / 180.0
                 cos_angle, sin_angle = np.cos(angle), np.sin(angle)
@@ -147,14 +147,14 @@ class NTURGBDDataset(Dataset):
                 features = torch.cat([non_rotatable, rotatable_rotated], dim=-1)
 
               
-            # >> 2-2. 가우시안 노이즈 추가 (50% 확률)
-            if np.random.rand() > 0.5:
+            # >> 2-2. 가우시안 노이즈 추가
+            if np.random.rand() > config.PROB:
                 noise = torch.randn_like(features) * 0.005 # 노이즈 수준
                 features += noise
 
                 
-            # 2-3. 임의 스케일링 (50% 확률)
-            if np.random.rand() > 0.5:
+            # 2-3. 임의 스케일링
+            if np.random.rand() > config.PROB:
                 scale_factor = np.random.uniform(0.9, 1.1)
 
                 
@@ -170,7 +170,7 @@ class NTURGBDDataset(Dataset):
                 
             # >> 2-4. 관절 마스킹
             # >> 모델이 부분적인 정보만으로도 동작하도록 훈련한다.
-            if np.random.rand() > 0.5:
+            if np.random.rand() > config.PROB:
                 num_joints = features.shape[1]
 
                 
@@ -185,7 +185,7 @@ class NTURGBDDataset(Dataset):
                 
             # >> 2-5. 시간 마스킹
             # >> 모델이 시간적 연속성이 일부 깨져도 동작하도록 훈련한다.
-            if np.random.rand() > 0.5:
+            if np.random.rand() > config.PROB:
                 total_frames = features.shape[0] # 전체 프레임 수 (T)
                 max_mask_len = 20 # 마스킹할 최대 프레임 길이
 

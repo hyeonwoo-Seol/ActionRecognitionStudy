@@ -4,7 +4,7 @@
 # 구현해야 할 기능
 # 1. 파일 읽어오기
 # 2. 좌표값을 내가 원하는 형태로 변환하기
-# 3. 뼈 길이 정규화....? 성능에 영향을 주는지 확인
+# 3. 뼈 길이 정규화가 성능에 영향을 주는지 확인
 # 4. 평균과 표준편차를 계산하기
 # 5. 이를 통합하는 main 함수 만들기
 # ##----------------------------------------------------------------------------
@@ -233,8 +233,9 @@ def calculate_and_save_stats():
         # normalized_coords = _normalize_by_bone_length(coords)
 
         # >> 다운샘플링
-        downsampled_coords = normalized_coords[::2, :, :]
-
+        # downsampled_coords = normalized_coords[::2, :, :]
+        downsampled_coords = coords[::2, :, :, :]
+        
         # >> 전처리된 좌표로 특징 계산
         features = _calculate_features(downsampled_coords)
         
@@ -320,11 +321,12 @@ def main():
             # normalized_coords = _normalize_by_bone_length(coords)
 
             # >> 다운샘플링
-            normalized_coords = normalized_coords[::2, :, :, :]
-
+            # normalized_coords = normalized_coords[::2, :, :, :] # 뼈 정규화를 사용하는 코드 
+            downsampled_coords = coords[::2, :, :]
+            
             # >> 특징 계산
-            raw_features = _calculate_features(normalized_coords)
-
+            # raw_features = _calculate_features(normalized_coords)  # 뼈 정규화를 사용하는 코드 
+            raw_features = _calculate_features(downsampled_coords)
 
             # >> 패딩 및 자르기 (Padding & Truncating)
             # 모든 데이터의 프레임 길이를 MAX_FRAMES로 통일한다.
