@@ -44,5 +44,5 @@ T_MULT = 2 # 15 에폭 다음 학습률 초기화는 그 2배인 30에폭이다.
 # >> gcn 사용 여부는 use_gcn을 True, False로 지정한다.
 # >> layer_dims 사용법은, [입력 크기, 출력 크기]이다. 만약 4층을 쌓으려면 [64, 128, 128, 256, 256] 하면 된다.
 BLOCK_TYPE = 'st'
-LAYER_DIMS = [64, 128, 256]
+LAYER_DIMS = [64, 64, 64, 128, 128]
 USE_GCN = True

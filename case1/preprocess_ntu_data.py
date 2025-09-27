@@ -23,7 +23,7 @@ SOURCE_DATA_PATH = '../../paper-review/Action_Recognition/Code/nturgbd01/'
 # >> 처리가 완료된 파일들을 저장할 위치
 TARGET_DATA_PATH = '../nturgbd_processed/'
 # >> 훈련 데이터셋의 평균과 표준편차를 저장할 파일 이름 
-STATS_FILE = 'stats.npz'
+STATS_FILE = '../stats.npz'
 # >> 모델에 입력으로 사용할 최대 프레임 수 (config 파일에서 가져옴)
 # >> 이보다 길면 잘라내고, 짧으면 0으로 채운다 (padding)
 MAX_FRAMES = config.MAX_FRAMES
