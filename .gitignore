@@ -23,6 +23,7 @@ datasets/
 *.avi
 *.pth
 *.h5
+*.hdf5
 *.onnx
 *.pb
 *.pkl
