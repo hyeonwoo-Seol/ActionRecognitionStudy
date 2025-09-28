@@ -446,7 +446,7 @@ class GCNTransformerModel(nn.Module):
                 nn.GELU(),
                 RMSNorm(128)
             )
-            self.dropout = nn.Dropout(p=config.DROUPUT)
+            self.dropout = nn.Dropout(p=config.DROPOUT)
             self.fc = nn.Linear(128, num_classes)
         elif self.mode == 'pretrain':
             # >> 사전학습(Pre-training)용 복원 헤드이다.
