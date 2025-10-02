@@ -33,7 +33,7 @@ from ntu_data_loader import NTURGBDDataset, DataLoader
 from model import GCNTransformerModel
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
-
+# python train.py --scheduler cosine_restarts
 
 # ## ----------------------------------------------------
 # 커맨드 라인 인자에 따라 스케줄러를 반환한다.
@@ -440,6 +440,17 @@ def main():
                 print(f"No imporvement in validation accuracy for {patience_counter} epoch(s).")
 
 
+            # 현재 에폭이 T_0 주기로 나누어 떨어질 때 스냅샷을 저장합니다.
+            # (epoch + 1)을 사용하는 이유는 epoch가 0부터 시작하기 때문입니다. (e.g., 15번째 에폭은 epoch=14)
+            if (epoch + 1) % config.T_0 == 0:
+                print(f"🎉 Saving snapshot model at epoch {epoch + 1}")
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': model.state_dict(),
+                    'best_acc': val_acc, # 해당 스냅샷 시점의 정확도
+                }, directory=config.SAVE_DIR, filename=f"snapshot_epoch_{epoch+1}.pth.tar")
+                
+                
             # >> 조기 종료 카운터가 설정된 patience 값에 도달하면
             if patience_counter >= patience:
                 print(f"Early stopping triggered after {patience} epochs without improvement.")
