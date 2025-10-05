@@ -443,7 +443,7 @@ def main():
             # 현재 에폭이 T_0 주기로 나누어 떨어질 때 스냅샷을 저장합니다.
             # (epoch + 1)을 사용하는 이유는 epoch가 0부터 시작하기 때문입니다. (e.g., 15번째 에폭은 epoch=14)
             if (epoch + 1) % config.T_0 == 0:
-                print(f"🎉 Saving snapshot model at epoch {epoch + 1}")
+                print(f"Saving snapshot model at epoch {epoch + 1}")
                 save_checkpoint({
                     'epoch': epoch + 1,
                     'state_dict': model.state_dict(),

@@ -99,6 +99,12 @@ Attention Pooling을 통해 중요한 부분에 높은 가중치를 부여하여
 
 여기서 Shift-GCN, Spatial Transformer, Temporal Transformer의 바로 뒤와 잔차 연결 블록 내부에서 RMS Normalization이 적용되어 데이터의 스케일을 정규화하고 다음 층으로 안정적인 값을 전달합니다.
 
+## train.py
+
+재현성을 위해 시드를 고정하고, Dataset에 경로, train/val, 프레임 수를 설정하고 이를 DataLoader에 넘겨줘서 효율적인 학습을 준비합니다.
+
+그리고 Shift-GCN + ST-Transformer 블록을 선언하고, 손실 함수를 CrossEntropy로 정의하고, 최적화 함수를 AdamW로 정의합니다.
+
+이전에 만든 체크포인트가 존재한다면 불러옵니다. 그리고 1 epoch 동안 학습/검증을 수행하고 학습 스케줄러를 업데이트 합니다. 이 때 최고 검증 정확도를 달성하면 저장합니다. 그리고 일정 에폭마다 스냅샷을 저장하여 스냅샷 앙상블을 수행합니다.
+
 ## 실험 결과
-
-
