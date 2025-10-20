@@ -352,7 +352,6 @@ def main():
     best_accuracy = 0.0
     last_val_acc = 0.0
 
-    last_lr = config.LEARNING_RATE
 
     # >> 체크포인트 파일이 저장될 경로를 설정한다.
     checkpoint_path = os.path.join(config.SAVE_DIR, "best_model.pth.tar")
@@ -388,8 +387,6 @@ def main():
         # >> 현재 시작 에폭에 맞게 스케줄러의 상태를 업데이트한다.
         for _ in range(start_epoch):
             scheduler.step()
-
-        last_lr = scheduler.get_last_lr()[0]
         print(f"Resuming from epoch {start_epoch}, with best accuracy {best_accuracy:.4f}")
     else: # >> 체크포인트 파일이 없으면 처음부터 학습을 시작한다.
         print("No checkpoint found, starting training from scratch.")
@@ -442,19 +439,17 @@ def main():
                 patience_counter += 1
                 print(f"No imporvement in validation accuracy for {patience_counter} epoch(s).")
 
-                
-            # >> 현재 LR이 이전 LR보다 크고, Warmup 기간이 지난 후에 저장하기
-            if current_lr > last_lr and epoch >= config.WARMUP_EPOCHS:
-                print(f"LR restarted. Saving snapshot model at epoch {epoch + 1}")
+
+            # 현재 에폭이 T_0 주기로 나누어 떨어질 때 스냅샷을 저장합니다.
+            # (epoch + 1)을 사용하는 이유는 epoch가 0부터 시작하기 때문입니다. (e.g., 15번째 에폭은 epoch=14)
+            if (epoch + 1) % config.T_0 == 0:
+                print(f"Saving snapshot model at epoch {epoch + 1}")
                 save_checkpoint({
                     'epoch': epoch + 1,
                     'state_dict': model.state_dict(),
-                    'best_acc': val_acc,
+                    'best_acc': val_acc, # 해당 스냅샷 시점의 정확도
                 }, directory=config.SAVE_DIR, filename=f"snapshot_epoch_{epoch+1}.pth.tar")
-
-            # >> 다음 에폭과의 비교를 위해 현재 LR을 last_lr에 저장
-            last_lr = current_lr
-                            
+                
                 
             # >> 조기 종료 카운터가 설정된 patience 값에 도달하면
             if patience_counter >= patience:
