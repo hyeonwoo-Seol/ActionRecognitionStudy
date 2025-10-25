@@ -348,34 +348,36 @@ class ST_Transformer_Block(nn.Module):
         # >> 각 프레임(T) 내에서 관절(J)들 간의 관계를 학습한다.
         # >> (N, T, J, C) -> (N*T, J, C) 형태로 변경하여 J를 시퀀스 길이로 취급한다.
         res_spatial = x_gcn
-        x_reshaped_spatial = x_gcn.contiguous().view(N * T, J, C_out)
+
+        # 1. 정규화를 먼저 적용합니다.
+        x_norm_spatial = self.norm_spatial(x_gcn) 
+
+        # 2. 정규화된 데이터를 Transformer에 입력합니다.
+        x_reshaped_spatial = x_norm_spatial.contiguous().view(N * T, J, C_out)
         x_spatial_attn = self.spatial_transformer_encoder(x_reshaped_spatial)
-        x_spatial_attn = self.norm_spatial(x_spatial_attn)
-        
 
-        # >> 원래 형태로 복원한다. (N*T, J, C) -> (N, T, J, C)
+        # 3. Transformer 통과 후에는 정규화를 적용하지 않습니다.
         x_spatial_out = x_spatial_attn.view(N, T, J, C_out)
-        x_spatial_out = x_spatial_out + res_spatial # 공간 내 잔차 연결
+        x_spatial_out = x_spatial_out + res_spatial
 
-
-        # >> 3. 시간 Transformer 어텐션이다.
-        # >> 각 관절(J)의 시간(T)적 흐름에 따른 관계를 학습한다.
-        # >> (N, T, J, C) -> (N*J, T, C) 형태로 변경하여 T를 시퀀스 길이로 취급한다.
+        # --- 시간 어텐션 수정 ---
         res_temporal = x_spatial_out
-        x_reshaped_temporal = x_spatial_out.permute(0, 2, 1, 3).contiguous().view(N * J, T, C_out)
+        
+        # 1. 정규화를 먼저 적용합니다.
+        x_norm_temporal = self.norm_temporal(x_spatial_out) 
+        
+        # 2. 정규화된 데이터를 Transformer에 입력합니다.
+        x_reshaped_temporal = x_norm_temporal.permute(0, 2, 1, 3).contiguous().view(N * J, T, C_out)
         x_temporal_attn = self.temporal_transformer_encoder(x_reshaped_temporal)
-        x_temporal_attn = self.norm_temporal(x_temporal_attn)
-        
-
-        # >> 원래 형태로 복원한다. (N*J, T, C) -> (N, T, J, C)
+    
+        # 3. Transformer 통과 후에는 정규화를 적용하지 않습니다.
         x_temporal_out = x_temporal_attn.view(N, J, T, C_out).permute(0, 2, 1, 3).contiguous()
-        x_temporal_out = x_temporal_out + res_temporal # 시간 내 잔차 연결
+        x_temporal_out = x_temporal_out + res_temporal
         
-
-        # >> 4. 최종 잔차 연결을 한다.
         x_final = x_temporal_out + res
-        
         return x_final
+
+        
 
 # ## -------------------------------------------------------------------------
 # GCN-Transformer 최종 모델
