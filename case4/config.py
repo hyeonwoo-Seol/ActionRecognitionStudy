@@ -27,7 +27,7 @@ PROB = 0.5 # 데이터 증강 확률
 
 # >> 학습 하이퍼파라미터
 EPOCHS = 100             # 총 학습 에폭
-LEARNING_RATE = 0.0005   # 학습률
+LEARNING_RATE = 0.0003   # 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
 WARMUP_EPOCHS = 3        # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수 
 GRAD_CLIP_NORM = 0.7     # 그레이디언트 폭발을 막기 위한 클리핑 최대 L2 Norm 값 
@@ -36,7 +36,7 @@ PATIENCE = 10 # 조기종료 변수
 LABEL_SMOOTHING = 0.1 # Loss Function CrossEntropy의 label smoothing
 DROPOUT = 0.5 # dropout
 ETA_MIN = 1e-6
-T_0 = 15 # 15에폭마다 학습률이 최대치로 초기화된다.
+T_0 = 100 # 15에폭마다 학습률이 최대치로 초기화된다.
 T_MULT = 1 # 2로 설정된 경우, 15에폭 다음에 학습률 초기화는 2배인 30에폭이다.
 
 # >> block_type, layer_dims, use_gcn를 설정한다.
