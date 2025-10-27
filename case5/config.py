@@ -5,7 +5,7 @@ import torch
 
 # >> NTU RGB+D 60 데이터셋의 .np 파일들이 있는 디렉토리 경로
 # >> 이 경로에는 preprocess_ntu_data.py를 실행하고 생성된 .np 파일들이 있는 경로로 지정해야 한다.
-DATASET_PATH = '../nturgbd_processed/'
+DATASET_PATH = '../nturgbd_processed_4fps/'
 
 # >> 학습된 모델 가중치(체크포인트)를 저장할 디렉토리
 SAVE_DIR = 'checkpoints/'
