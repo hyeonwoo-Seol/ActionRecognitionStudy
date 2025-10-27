@@ -387,8 +387,9 @@ class GCNTransformerModel(nn.Module):
                  num_coords = config.NUM_COORDS,
                  num_classes = config.NUM_CLASSES,
                  block_type ='standard',
-                 layer_dims = [64, 64, 128],
-                 use_gcn=True
+                 layer_dims = config.LAYER_DIMS,
+                 use_gcn = True,
+                 num_shared_blocks = 1
                  ):
         super().__init__()
 
@@ -404,69 +405,88 @@ class GCNTransformerModel(nn.Module):
         )
         
         # >> 동적으로 transformer 블록을 생성한다.
-        self.blocks = nn.ModuleList()
+        # self.blocks = nn.ModuleList()
+
+        self.shared_blocks = nn.ModuleList()
+        self.blocks_full = nn.ModuleList()
+        self.blocks_half = nn.ModuleList()
 
         # >> layer_dims 리스트를 기반으로 반복문을 실행하여 블록을 쌓는다.
-        for i in range(len(layer_dims) - 1):
+        # >> 1. 공유 블록 생성
+        for i in range(num_shared_blocks):
+            in_dim = layer_dims[i]
+            out_dim = layer_dims[i+1]
+            self.shared_blocks.append(
+                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn)
+            )
+
+        # >> 2. 분기 블록 생성
+        for i in range(num_shared_blocks, len(layer_dims) - 1):
             in_dim = layer_dims[i]
             out_dim = layer_dims[i+1]
             
-            if block_type == 'standard':
-                block = StandardTransformerBlock(
-                    in_features=in_dim, 
-                    out_features=out_dim, 
-                    num_joints=num_joints,
-                    use_gcn=use_gcn
-                )
-            elif block_type == 'st':
-                block = ST_Transformer_Block(
-                    in_features=in_dim, 
-                    out_features=out_dim, 
-                    num_joints=num_joints,
-                    use_gcn=use_gcn
-                )
-            else:
-                raise ValueError(f"Unknown block_type: {block_type}")
-            
-            self.blocks.append(block)
+            # Full-scale 경로용 블록
+            self.blocks_full.append(
+                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn)
+            )
+            # Half-scale 경로용 블록 (가중치를 공유하지 않는 별개의 인스턴스)
+            self.blocks_half.append(
+                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn)
+            )
 
         # >> 출력 부분 처리
         final_dim = layer_dims[-1]
 
-        # >> 시퀀스 전체 정보를 하나의 벡터로 요약하는 Attention Pooling이다.
-        self.attention_pool = AttentionPooling(d_model=final_dim)
-        
-        
+        # >> 시퀀스 전체 정보를 하나의 벡터로 요약하는 Attention Pooling
+        self.attention_pool_full = AttentionPooling(d_model=final_dim) # <<< Full 경로용
+        self.attention_pool_half = AttentionPooling(d_model=final_dim) # <<< Half 경로용
 
-        # >> 움직임 요약 벡터와 자세 벡터(128)를 결합하는 층이다.
+        # >> 움직임 요약 벡터를 결합하기
         self.fusion_layer = nn.Sequential(
-            nn.Linear(final_dim, 128),
+            nn.Linear(final_dim * 2, 128), # <<< 입력 크기 2배 (256*2 = 512)
             nn.GELU(),
             RMSNorm(128)
         )
-        
 
+        
         # >> 과적합 방지를 위한 Dropout이다.
         self.dropout = nn.Dropout(p=config.DROPOUT)
         # >> 최종 클래스를 분류하는 층이다.
         self.fc = nn.Linear(128, num_classes)
 
+    # >> Helper 함수
+    def _create_block(self, block_type, in_dim, out_dim, num_joints, use_gcn):
+        if block_type == 'standard':
+            block = StandardTransformerBlock(
+                in_features=in_dim, 
+                out_features=out_dim, 
+                num_joints=num_joints,
+                use_gcn=use_gcn
+            )
+        elif block_type == 'st':
+            block = ST_Transformer_Block(
+                in_features=in_dim, 
+                out_features=out_dim, 
+                num_joints=num_joints,
+                use_gcn=use_gcn
+            )
+        else:
+            raise ValueError(f"Unknown block_type: {block_type}")
+        return block
 
     def forward(self, motion_features):
         N, _, T, J = motion_features.shape
         C_proj = self.input_projection.out_features
         
 
-                
-
-        # >> 2. 움직임 특징을 처리한다.
+        # >> 1. 움직임 특징을 처리한다.
         x = motion_features.permute(0, 2, 3, 1).contiguous()
         
         # >> 각 관절의 좌표 정보를 64차원 벡터로 임베딩한다.
         x = self.input_projection(x) # (N, T, J, 64)
 
 
-        # >> 3. 위치 인코딩을 추가한다.
+        # >> 2. 위치 인코딩을 추가한다.
         x_flat = x.view(N, T * J, C_proj)
         x_flat_pe = self.pos_encoder(x_flat)
 
@@ -474,19 +494,34 @@ class GCNTransformerModel(nn.Module):
         x = x_flat_pe.view(N, T, J, C_proj)
         
 
-        # >> 4. GCN-Transformer 블록을 통과시킨다.
-        for block in self.blocks:
-            x = block(x)
-        
+        # >> 3. GCN-Transformer 블록을 통과시킨다.
+        # for block in self.blocks:
+        #    x = block(x)
 
-        # >> 5. 동적 움직임을 요약한다.
-        motion_summary = self.attention_pool(x)
-        
-        
-        
-        
+        # >> 3-1. 공유 블록 통과
+        x_shared = x
+        for block in self.shared_blocks:
+            x_shared = block(x_shared) # 예: (N, 150, J, 128)
 
-        # >> 7. 최종 분류를 수행한다.
+        # >> 3-2. 경로 분기
+        x_full = x_shared # (N, 150, J, 128)
+        x_half = x_shared[:, ::2, :, :].contiguous() # (N, 75, J, 128)
+
+        # >> 3-3. 각 경로별 독립 블록 통과
+        for block in self.blocks_full:
+            x_full = block(x_full) # 최종: (N, 150, J, 256)
+            
+        for block in self.blocks_half:
+            x_half = block(x_half) # 최종: (N, 75, J, 256)
+
+        # >> 4. 동적 움직임 요약
+        summary_full = self.attention_pool_full(x_full) # (N, 256)
+        summary_half = self.attention_pool_half(x_half) # (N, 256)
+
+        # >> 5. 두 요약 벡터 결합
+        motion_summary = torch.cat([summary_full, summary_half], dim=1) # (N, 512)
+
+        # >> 6. 최종 분류를 수행다한
         final_vector = self.fusion_layer(motion_summary)
         final_vector = self.dropout(final_vector)
         output = self.fc(final_vector)
