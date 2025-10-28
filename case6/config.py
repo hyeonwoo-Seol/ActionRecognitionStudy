@@ -15,7 +15,7 @@ SEED = 42
 
 # >> 데이터 로더 설정
 MAX_FRAMES = 150  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
-BATCH_SIZE = 32   # 배치 크기
+BATCH_SIZE = 24   # 배치 크기
 NUM_WORKERS = 6   # 데이터를 불러올 때 사용할 CPU 프로세서 수 
 PIN_MEMORY = True # GPU 사용 시 데이터 전송 속도를 높이기 위한 설정
 
@@ -27,14 +27,14 @@ PROB = 0.5 # 데이터 증강 확률
 
 # >> 학습 하이퍼파라미터
 EPOCHS = 100             # 총 학습 에폭
-LEARNING_RATE = 0.0003   # 
+LEARNING_RATE = 0.0001   # 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
 WARMUP_EPOCHS = 10        # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수 
 GRAD_CLIP_NORM = 1.0     # 그레이디언트 폭발을 막기 위한 클리핑 최대 L2 Norm 값 
 ADAMW_WEIGHT_DECAY = 0.1 # AdamW weight decay , L2 정규화의 강도 설정
 PATIENCE = 10 # 조기종료 변수
 LABEL_SMOOTHING = 0.1 # Loss Function CrossEntropy의 label smoothing
-DROPOUT = 0.3 # dropout
+DROPOUT = 0.2 # dropout
 ETA_MIN = 1e-6
 T_0 = 100 # 15에폭마다 학습률이 최대치로 초기화된다.
 T_MULT = 1 # 2로 설정된 경우, 15에폭 다음에 학습률 초기화는 2배인 30에폭이다.
