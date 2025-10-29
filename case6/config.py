@@ -27,7 +27,7 @@ PROB = 0.5 # 데이터 증강 확률
 
 # >> 학습 하이퍼파라미터
 EPOCHS = 100             # 총 학습 에폭
-LEARNING_RATE = 0.0001   # 
+LEARNING_RATE = 0.00001   # 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
 WARMUP_EPOCHS = 10        # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수 
 GRAD_CLIP_NORM = 1.0     # 그레이디언트 폭발을 막기 위한 클리핑 최대 L2 Norm 값 
