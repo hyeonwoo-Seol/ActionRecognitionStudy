@@ -397,8 +397,22 @@ case5
 
 2프레임 간격을 학습하는 것은 섬세한 움직임 학습을 목표로 하고, 4프레임 간격을 학습하는 것은 더 거친 움직임 학습을 목표로 합니다.
 
-배치 사이즈는 32에서 24으로 줄이고, Leraning rate는 0.0003에서 0.0001로 줄였습니다. Dropout 비율은 0.3에서 0.2로 낮췄습니다.
+그리고 관절 간의 각도 정보를 입력으로 추가했습니다. 정적인 자세에 대한 정답을 맞출 수 없는 것으로 판단했습니다.
 
-### 결과 11
+아래와 같이 하이퍼 파라미터를 설정했습니다.
 
-77.41%
+# >> 학습 하이퍼파라미터
+
+```
+LEARNING_RATE = 0.0002
+WARMUP_EPOCHS = 5        # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수
+GRAD_CLIP_NORM = 1.0     # 그레이디언트 폭발을 막기 위한 클리핑 최대 L2 Norm 값
+ADAMW_WEIGHT_DECAY = 0.01 # AdamW weight decay , L2 정규화의 강도 설정
+PATIENCE = 10 # 조기종료 변수
+LABEL_SMOOTHING = 0.05 # Loss Function CrossEntropy의 label smoothing
+DROPOUT = 0.2 # dropout
+
+BLOCK_TYPE = 'st'
+LAYER_DIMS = [64, 128, 128, 256]
+USE_GCN = True
+```

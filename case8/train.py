@@ -272,7 +272,7 @@ def main():
     set_seed(config.SEED)
     print(f"Seed fixed to {config.SEED}")
 
-    LR_DROP_PATIENCE = 5 # 2번 연속 성능 향상이 없으면 LR 감소
+    LR_DROP_PATIENCE = 4 # 2번 연속 성능 향상이 없으면 LR 감소
     MAX_LR_DROPS = 2     # LR 감소 최대 횟수
 
     # >> 학습에 사용할 장치(CPU 또는 GPU)를 설정한다.
@@ -458,9 +458,9 @@ def main():
                         
                         print(f"--- Triggering LR Drop #{lr_drop_count} ---")
                         
-                        # 옵티마이저의 모든 파라미터 그룹의 LR을 1/10로 줄임
+                        # 옵티마이저의 모든 파라미터 그룹의 LR을 1/2로 줄임
                         for param_group in optimizer.param_groups:
-                            param_group['lr'] *= 0.1
+                            param_group['lr'] *= 0.5
                         
                         new_lr = optimizer.param_groups[0]['lr']
                         print(f"Learning rate reduced to: {new_lr:.8f}")
