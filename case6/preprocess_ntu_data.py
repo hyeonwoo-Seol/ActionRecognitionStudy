@@ -19,9 +19,9 @@ from multiprocessing import Pool, cpu_count
 # >> 처리할 NTU_RGB+D 60 skeleton 데이터가 있는 위치
 SOURCE_DATA_PATH = '../../paper-review/Action_Recognition/Code/nturgbd01/' 
 # >> 처리가 완료된 파일들을 저장할 위치
-TARGET_DATA_PATH = '../nturgbd_processed/'
+TARGET_DATA_PATH = '../nturgbd_processed_allNew/'
 # >> 훈련 데이터셋의 평균과 표준편차를 저장할 파일 이름 
-STATS_FILE = '../stats.npz'
+STATS_FILE = '../stats_allNew.npz'
 # >> 모델에 입력으로 사용할 최대 프레임 수 (config 파일에서 가져옴)
 # >> 이보다 길면 잘라내고, 짧으면 0으로 채운다 (padding)
 MAX_FRAMES = config.MAX_FRAMES
@@ -33,6 +33,30 @@ BASE_NUM_JOINTS = 25
 # >> 훈련에 사용할 피실험자(subject) ID 목록.
 # >> 이 ID를 기준으로 훈련 데이터와 검증/테스트 데이터를 나눕니다.
 TRAINING_SUBJECTS = [1, 2, 4, 5, 8, 9, 13, 14, 15, 16, 17, 18, 19, 25, 27, 28, 31, 34, 35, 38]
+
+# ## ---------------------------------------------------------------------------------
+# >> 뼈 길이 계산을 위한 관절 연결 정보 (부모 -> 자식)
+# >> model.py의 get_ntu_shift_decompositions와 동일한 구조
+# ## ---------------------------------------------------------------------------------
+SKELETON_BONES = [
+    (20, 1), (1, 0), (20, 2), (2, 3),
+    (20, 4), (4, 5), (5, 6), (6, 7), (7, 21), (7, 22),
+    (20, 8), (8, 9), (9, 10), (10, 11), (11, 23), (11, 24),
+    (0, 12), (12, 13), (13, 14), (14, 15),
+    (0, 16), (16, 17), (17, 18), (18, 19)
+] # 총 24개의 뼈
+
+# ## ---------------------------------------------------------------------------------
+# >> 관절 각도 계산을 위한 (조부모, 부모, 자식) 관절 트리플렛
+# ## ---------------------------------------------------------------------------------
+JOINT_ANGLE_TRIPLETS = [
+    (20, 4, 5), (4, 5, 6), (5, 6, 7),        # 오른팔
+    (20, 8, 9), (8, 9, 10), (9, 10, 11),     # 왼팔
+    (0, 12, 13), (12, 13, 14), (13, 14, 15),  # 오른다리
+    (0, 16, 17), (16, 17, 18), (17, 18, 19),  # 왼다리
+    (20, 1, 0), (1, 20, 2), (1, 20, 4), (1, 20, 8), # 몸통/목
+    (12, 0, 16), (4, 20, 8)                   # 골반/어깨 너비
+] # 총 20개의 각도
 
 
 
@@ -141,55 +165,202 @@ def _normalize_by_bone_length(coords):
     
     return normalized_coords
 
-
+# ## ------------------------------------------------------------------------------
+# [신규] 두 3D 벡터 배치 간의 각도를 계산하는 헬퍼 함수
+# vec1, vec2 shape: (T, 2, 3) -> angle shape: (T, 2)
+# ## ------------------------------------------------------------------------------
+def _calculate_angle_between_vectors(vec1, vec2):
+    # >> 벡터 정규화 (단위 벡터로)
+    vec1_norm = vec1 / (np.linalg.norm(vec1, axis=-1, keepdims=True) + 1e-8)
+    vec2_norm = vec2 / (np.linalg.norm(vec2, axis=-1, keepdims=True) + 1e-8)
+    
+    # >> 내적(dot product) 계산
+    # (T, 2, 3) * (T, 2, 3) -> (T, 2)
+    dot_prod = np.einsum('ntc,ntc->nt', vec1_norm, vec2_norm)
+    
+    # >> 클리핑 후 아크코사인 (라디안 값)
+    angle = np.arccos(np.clip(dot_prod, -1.0, 1.0))
+    return angle
 
 
 # ## ------------------------------------------------------------------------------
-# 좌표로부터 이동 거리, 방향, 가속도 등의 특징을 계산한다.
-# shape: (num_frames, 50, 7)
-# (50 = 25관절 * 2명, 7 = 거리(1) + 방향(3) + 가속도(3))
+# [수정됨] 좌표로부터 동적 특징(7D)과 정적 특징(2D)을 계산한다.
+# shape: (num_frames, 50, 9)
+# (50 = 25관절 * 2명, 9 = 거리(1) + 방향(3) + 가속도(3) + 뼈길이(1) + 관절각도(1))
 # ## ------------------------------------------------------------------------------
 def _calculate_features(coords):
-    # >> 스켈레톤 중심화
-    # >> 골반 중심(0번 관절)을 원점(0,0,0)으로 만들어 전체 스켈레톤의 위치 변화에 무관하도록 한다.
-    center_joint = coords[:, :, 0:1, :]
-    coords = coords - center_joint
+    # >> coords shape: (T, 2, 25, 3)
+    T = coords.shape[0]
+    if T == 0:
+        # >> 빈 프레임이면 (0, 50, 9) 형태의 빈 배열 반환
+        return np.zeros((0, NUM_JOINTS, config.NUM_COORDS))
 
+    # --- 1. (기존) 동적 특징 계산 (7D) ---
+    
+    # >> 스켈레톤 중심화
+    center_joint = coords[:, :, 0:1, :]
+    centered_coords = coords - center_joint
 
     # >> 변위 계산
-    # >> 현재 프레임과 이전 프레임의 좌표 차이를 계산하여 각 관절의 움직임을 나타낸다.
-    displacement = np.zeros_like(coords)
-    displacement[1:] = coords[1:] - coords[:-1] # 첫 프레임(인덱스 0)의 변위는 0이므로, 두 번째 프레임부터 계산
-
-
+    displacement = np.zeros_like(centered_coords)
+    displacement[1:] = centered_coords[1:] - centered_coords[:-1]
+    
     # >> 거리 계산
-    # >> 변위 벡터의 크기(L2 norm)를 계산하여 스칼라 값인 이동 거리를 구한다.
     distance = np.linalg.norm(displacement, axis=-1, keepdims=True)
 
-
     # >> 방향 계산
-    # >> 변위 벡터를 자신의 크기로 나누어 단위 벡터(방향)를 구한다.
-    magnitude = np.linalg.norm(displacement, axis=-1, keepdims=True) + 1e-8
-    direction = displacement / magnitude
-
+    magnitude_disp = np.linalg.norm(displacement, axis=-1, keepdims=True) + 1e-8
+    direction = displacement / magnitude_disp
 
     # >> 가속도 계산
-    # >> 변위의 변화율, 즉 현재 변위와 이전 변위의 차이를 계산한다.
     acceleration = np.zeros_like(displacement)
     acceleration[1:] = displacement[1:] - displacement[:-1]
 
-
-    # >> 특징 결합
-    # >> 계산된 거리(1차원), 방향(3차원), 가속도(3차원)를 합쳐 7차원의 특징 벡터를 만든다.
-    combined_features_per_person = np.concatenate((distance, direction, acceleration), axis=-1)
+    # >> 동적 특징 결합 (T, 2, 25, 7)
+    dynamic_features = np.concatenate((distance, direction, acceleration), axis=-1)
 
 
-    # >> 두 사람의 데이터를 분리한다.
+    # --- 2. [신규] 정적 특징 계산 (2D) ---
+    
+    # >> 2-1. 뼈 길이 특징 (1D)
+    # >> 뼈 길이를 정규화하기 위한 기준 척추 길이 계산
+    SPINE_SHOULDER_JOINT = 20
+    SPINE_BASE_JOINT = 0
+    ref_joint1 = coords[:, :, SPINE_SHOULDER_JOINT:SPINE_SHOULDER_JOINT+1, :]
+    ref_joint2 = coords[:, :, SPINE_BASE_JOINT:SPINE_BASE_JOINT+1, :]
+    # (T, 2, 1, 1)
+    torso_lengths = np.linalg.norm(ref_joint1 - ref_joint2, axis=-1, keepdims=True) + 1e-8
+    
+    # >> (T, 2, 25, 1) 크기의 0 벡터 초기화
+    bone_length_features = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
+
+    for parent, child in SKELETON_BONES:
+        # >> 뼈 벡터 계산 (T, 2, 3)
+        bone_vec = coords[:, :, child, :] - coords[:, :, parent, :]
+        # >> 뼈 길이 계산 (T, 2, 1)
+        bone_len = np.linalg.norm(bone_vec, axis=-1, keepdims=True)
+        # >> 정규화된 뼈 길이 (T, 2, 1)
+        norm_len = bone_len / torso_lengths.squeeze(-1)
+        # >> 자식(child) 관절의 특징 채널에 정규화된 뼈 길이 값을 할당
+        bone_length_features[:, :, child, 0] = norm_len.squeeze(-1)
+
+
+    # >> 2-2. 관절 각도 특징 (1D)
+    # >> (T, 2, 25, 1) 크기의 0 벡터 초기화
+    joint_angle_features = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
+    
+    for p_idx, j_idx, c_idx in JOINT_ANGLE_TRIPLETS:
+        # >> 두 개의 뼈 벡터 계산 (T, 2, 3)
+        vec1 = coords[:, :, p_idx, :] - coords[:, :, j_idx, :]
+        vec2 = coords[:, :, c_idx, :] - coords[:, :, j_idx, :]
+
+        # >> 벡터 크기 계산 (T, 2)
+        mag1 = np.linalg.norm(vec1, axis=-1)
+        mag2 = np.linalg.norm(vec2, axis=-1)
+        
+        # >> 코사인 각도 계산 (T, 2)
+        dot_prod = np.einsum('ntc,ntc->nt', vec1, vec2)
+        cos_theta = dot_prod / (mag1 * mag2 + 1e-8)
+        
+        # >> 클리핑 후 아크코사인 변환 (라디안 값) (T, 2)
+        angle = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+        
+        # >> 중심(joint) 관절의 특징 채널에 각도 값을 할당
+        joint_angle_features[:, :, j_idx, 0] = angle
+        
+
+    # --- 3. [신규] 몸통 기준 상대 각도 (2D) ---
+    # (Pointing 동작 등 전역 방향성 문제를 해결하기 위함)
+    
+    # >> 3-1. 몸통 좌표계 기준 벡터 3개 정의 (T, 2, 3)
+    torso_Y_vec = coords[:, :, 20, :] - coords[:, :, 0, :]  # Y축 (위쪽)
+    torso_X_vec = coords[:, :, 4, :] - coords[:, :, 8, :]  # X축 (오른쪽)
+    torso_Z_vec = np.cross(torso_X_vec, torso_Y_vec)       # Z축 (정면)
+
+    # >> 기준 벡터 정규화
+    torso_Y_norm = torso_Y_vec / (np.linalg.norm(torso_Y_vec, axis=-1, keepdims=True) + 1e-8)
+    torso_Z_norm = torso_Z_vec / (np.linalg.norm(torso_Z_vec, axis=-1, keepdims=True) + 1e-8)
+
+    # >> 3-2. 4대 팔다리 벡터 정의 (T, 2, 3)
+    vec_ru_arm = coords[:, :, 5, :] - coords[:, :, 4, :]  # 오른팔 (어깨->팔꿈치)
+    vec_lu_arm = coords[:, :, 9, :] - coords[:, :, 8, :]  # 왼팔
+    vec_r_thigh = coords[:, :, 13, :] - coords[:, :, 12, :] # 오른허벅지
+    vec_l_thigh = coords[:, :, 17, :] - coords[:, :, 16, :] # 왼허벅지
+
+    # >> 3-3. 각도 계산
+    angle_ru_arm_Y = _calculate_angle_between_vectors(vec_ru_arm, torso_Y_norm) # (T, 2)
+    angle_lu_arm_Y = _calculate_angle_between_vectors(vec_lu_arm, torso_Y_norm)
+    angle_r_thigh_Y = _calculate_angle_between_vectors(vec_r_thigh, torso_Y_norm)
+    angle_l_thigh_Y = _calculate_angle_between_vectors(vec_l_thigh, torso_Y_norm)
+    
+    angle_ru_arm_Z = _calculate_angle_between_vectors(vec_ru_arm, torso_Z_norm)
+    angle_lu_arm_Z = _calculate_angle_between_vectors(vec_lu_arm, torso_Z_norm)
+    angle_r_thigh_Z = _calculate_angle_between_vectors(vec_r_thigh, torso_Z_norm)
+    angle_l_thigh_Z = _calculate_angle_between_vectors(vec_l_thigh, torso_Z_norm)
+
+    # >> 3-4. 특징 채널에 할당 (2개의 새로운 채널 생성)
+    rel_angle_Y_feat = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
+    rel_angle_Z_feat = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
+    
+    rel_angle_Y_feat[:, :, 5, 0] = angle_ru_arm_Y   # 오른 팔꿈치
+    rel_angle_Y_feat[:, :, 9, 0] = angle_lu_arm_Y   # 왼 팔꿈치
+    rel_angle_Y_feat[:, :, 13, 0] = angle_r_thigh_Y # 오른 무릎
+    rel_angle_Y_feat[:, :, 17, 0] = angle_l_thigh_Y # 왼 무릎
+    
+    rel_angle_Z_feat[:, :, 5, 0] = angle_ru_arm_Z
+    rel_angle_Z_feat[:, :, 9, 0] = angle_lu_arm_Z
+    rel_angle_Z_feat[:, :, 13, 0] = angle_r_thigh_Z
+    rel_angle_Z_feat[:, :, 17, 0] = angle_l_thigh_Z
+
+    # --- 4. [신규] 비-인접 관절 거리 (2D) ---
+    # (Clapping 등 팔/다리 상호작용을 파악하기 위함)
+
+    # >> 4-1. 거리 계산
+    dist_hands_vec = coords[:, :, 7, :] - coords[:, :, 11, :] # 오른손 - 왼손
+    dist_feet_vec = coords[:, :, 15, :] - coords[:, :, 19, :] # 오른발 - 왼발
+    dist_rh_rf_vec = coords[:, :, 7, :] - coords[:, :, 15, :] # 오른손 - 오른발
+    dist_lh_lf_vec = coords[:, :, 11, :] - coords[:, :, 19, :] # 왼손 - 왼발
+
+    # >> (T, 2)
+    dist_hands = np.linalg.norm(dist_hands_vec, axis=-1)
+    dist_feet = np.linalg.norm(dist_feet_vec, axis=-1)
+    dist_rh_rf = np.linalg.norm(dist_rh_rf_vec, axis=-1)
+    dist_lh_lf = np.linalg.norm(dist_lh_lf_vec, axis=-1)
+
+    # >> 4-2. 척추 길이로 정규화
+    torso_lengths_squeezed = torso_lengths.squeeze() # (T, 2)
+    norm_dist_hands = dist_hands / torso_lengths_squeezed
+    norm_dist_feet = dist_feet / torso_lengths_squeezed
+    norm_dist_rh_rf = dist_rh_rf / torso_lengths_squeezed
+    norm_dist_lh_lf = dist_lh_lf / torso_lengths_squeezed
+
+    # >> 4-3. 특징 채널에 할당 (2개의 새로운 채널 생성)
+    inter_dist_feat_1 = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
+    inter_dist_feat_2 = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
+
+    inter_dist_feat_1[:, :, 7, 0] = norm_dist_hands   # 오른손
+    inter_dist_feat_1[:, :, 15, 0] = norm_dist_feet  # 오른발
+    inter_dist_feat_2[:, :, 7, 0] = norm_dist_rh_rf  # 오른손
+    inter_dist_feat_2[:, :, 11, 0] = norm_dist_lh_lf # 왼손
+
+    # --- 5. [신규] 모든 특징 결합 (9D + 4D = 13D) ---
+    combined_features_per_person = np.concatenate(
+        (dynamic_features,      # 7D
+         bone_length_features,  # 1D
+         joint_angle_features,  # 1D
+         rel_angle_Y_feat,      # 1D
+         rel_angle_Z_feat,      # 1D
+         inter_dist_feat_1,     # 1D
+         inter_dist_feat_2      # 1D
+        ), 
+        axis=-1
+    ) # shape: (T, 2, 25, 13)
+
+    
     person1_features = combined_features_per_person[:, 0, :, :]
     person2_features = combined_features_per_person[:, 1, :, :]
     
-
-    # >> 두 사람의 특징을 관절 축(axis=1)을 따라 연결하여 (num_frames, 50, 7) 형태로 만든다.
+    # >> (T, 50, 13) 형태로 반환
     final_features = np.concatenate((person1_features, person2_features), axis=1)
     
     return final_features
@@ -210,6 +381,8 @@ def process_file_for_stats(filename):
         return None  # 파일 내용이 비어있으면 None 반환
 
     downsampled_coords = coords[::2, :, :, :]
+    
+    # >> [수정됨] 13차원 특징을 반환
     features = _calculate_features(downsampled_coords)
     
     valid_frames = features.reshape(-1, features.shape[-1])
@@ -265,25 +438,28 @@ def calculate_and_save_stats():
 def process_and_save_file(filename):
     """파일 하나를 전처리하고 .pt 파일로 저장합니다."""
     if not filename.endswith('.skeleton'):
-        return # .skeleton 파일이 아니면 아무것도 하지 않음
+        return
 
     skeleton_path = os.path.join(SOURCE_DATA_PATH, filename)
     coords = _read_skeleton_file(skeleton_path)
     
     if coords.shape[0] == 0:
-        processed_features = np.zeros((MAX_FRAMES, NUM_JOINTS, config.NUM_COORDS))
+        # >> 13차원 0벡터
+        processed_features = np.zeros((MAX_FRAMES, NUM_JOINTS, config.NUM_COORDS)) 
         first_frame_coords = np.zeros((NUM_JOINTS, 3))
     else: 
         first_frame_raw = coords[0, :, :, :]
         first_frame_coords = np.concatenate((first_frame_raw[0], first_frame_raw[1]), axis=0)
         
         downsampled_coords = coords[::2, :, :]
-        raw_features = _calculate_features(downsampled_coords)
+        # >> 13차원 특징 계산
+        raw_features = _calculate_features(downsampled_coords) 
         
         num_frames = raw_features.shape[0]
         if num_frames < MAX_FRAMES:
             pad_width = MAX_FRAMES - num_frames
-            padding = np.zeros((pad_width, NUM_JOINTS, config.NUM_COORDS))
+            # >> 13차원 0벡터
+            padding = np.zeros((pad_width, NUM_JOINTS, config.NUM_COORDS)) 
             processed_features = np.concatenate((raw_features, padding), axis=0)
         else:
             processed_features = raw_features[:MAX_FRAMES]

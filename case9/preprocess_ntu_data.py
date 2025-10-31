@@ -30,6 +30,8 @@ MAX_FRAMES = config.MAX_FRAMES
 NUM_JOINTS = config.NUM_JOINTS
 # >> NTU 데이터셋의 기본 관절 수 (한 사람당 25개)
 BASE_NUM_JOINTS = 25
+# >> 파일에서 임시로 읽어들일 최대 사람 수
+MAX_BODIES = 5
 # >> 훈련에 사용할 피실험자(subject) ID 목록.
 # >> 이 ID를 기준으로 훈련 데이터와 검증/테스트 데이터를 나눕니다.
 TRAINING_SUBJECTS = [1, 2, 4, 5, 8, 9, 13, 14, 15, 16, 17, 18, 19, 25, 27, 28, 31, 34, 35, 38]
@@ -66,70 +68,177 @@ JOINT_ANGLE_TRIPLETS = [
 # 파일을 읽어 (num_frames, 2, 25, 3) 형태의 3D 좌표 numpy 배열로 반환한다.
 # ##----------------------------------------------------------------------------------
 def _read_skeleton_file(filepath):
-    # >> 파일을 열어서 라인들을 읽어온다.
+    # >> 첫 번째 라인에서 전체 프레임 수를 먼저 읽는다.
     try:
         with open(filepath, 'r') as f:
-            lines = f.readlines()
-    except FileNotFoundError:
-        print(f"Error: File not found at {filepath}")
+            first_line = f.readline()
+            num_frames = int(first_line)
+    except (FileNotFoundError, ValueError, IOError):
+        print(f"Error: Could not read frame count from {filepath}")
         return np.zeros((0, 2, BASE_NUM_JOINTS, 3))
-    
 
-    # >> 첫 번째 라인은 전체 프레임 수를 나타낸다.
-    num_frames = int(lines[0])
-    frames_data = [] # 각 프레임의 데이터를 저장할 리스트
-    line_idx = 1 # 현재 읽고 있는 라인 수
+    if num_frames == 0:
+        return np.zeros((0, 2, BASE_NUM_JOINTS, 3))
 
+    # --- 1. 첫 번째 스캔 (Pass 1): "실제 데이터가 있는" bodyID 2개 찾기 ---
+    # readlines() 대신 파일을 열어 한 줄씩 읽으며 ID만 카운트한다.
+    body_id_counts = {}
+    try:
+        with open(filepath, 'r') as f:
+            f.readline()  # 첫 번째 프레임 수 라인 건너뛰기
 
-    # >> 전체 프레임 수만큼 반복한다.
-    for _ in range(num_frames):
-        if line_idx >= len(lines): break # 파일 끝에 도달하면 중단
-        
-        # >> 해당 프레임에 감지된 사람(body)의 수를 읽는다.
-        num_bodies = int(lines[line_idx].strip())
-        line_idx += 1
-        
-        # >> 처음에 각 프레임은 (2, 25, 3) shape의 0으로 채워진 배열로 초기화된다.
-        frame_person_coords = np.zeros((2, BASE_NUM_JOINTS, 3))
-
-
-        # >> 감지된 사람 수만큼 반복한다.
-        for i in range(num_bodies):
-            if line_idx >= len(lines): break
-            
-            # bodyID, clipped 등의 정보가 담긴 라인을 읽고 다음 라인으로 넘어간다.
-            # 사용 안 하기 때문이다.
-            line_idx += 1 
-            
-            if line_idx >= len(lines): break
-            # >> 해당 사람의 관절(joint) 수를 읽는다.
-            num_joints = int(lines[line_idx].strip())
-            line_idx += 1
-
-            # >> 관절 수만큼 반복하여 각 관절의 좌표를 읽는다.
-            for j in range(num_joints):
-                if line_idx >= len(lines): break
-                
-                # >> 한 라인에 있는 관절 정보를 공백 기준으로 분리한다.
-                joint_info = lines[line_idx].strip().split()
+            line_idx = 1
+            while True:
+                line = f.readline()
+                if not line: break # 파일 끝
                 line_idx += 1
                 
-                # >> 최대 2명의 사람(i < 2)과 25개의 관절(j < BASE_NUM_JOINTS) 정보만 저장한다.
-                if i < 2 and j < BASE_NUM_JOINTS:
-                    x, y, z = map(float, joint_info[:3]) # x, y, z 좌표만 추출하고 float으로 변환
-                    frame_person_coords[i, j] = [x, y, z] # 미리 만들어둔 배열에 좌표를 저장
-        
-        # >> 현재 프레임의 좌표 데이터를 리스트에 추가한다.
-        frames_data.append(frame_person_coords)
-    
+                try:
+                    num_bodies = int(line.strip())
+                except ValueError:
+                    # print(f"Warning: Invalid body count at line {line_idx} in {filepath}. Skipping frame.")
+                    continue
 
-    # >> 만약 처리된 프레임 데이터가 없다면 빈 배열을 반환한다.
-    if not frames_data:
+                for i in range(num_bodies):
+                    line = f.readline() # body info line
+                    if not line: break
+                    line_idx += 1
+                    
+                    body_info = line.strip().split()
+                    if len(body_info) < 1:
+                        # print(f"Warning: Skipping empty body info line {line_idx} in {filepath}")
+                        continue
+                    
+                    body_id = body_info[0]
+
+                    line = f.readline() # num joints line
+                    if not line: break
+                    line_idx += 1
+                    
+                    try:
+                        num_joints = int(line.strip())
+                    except ValueError:
+                        # print(f"Warning: Invalid joint count at line {line_idx} in {filepath}.")
+                        num_joints = 0
+                    
+                    # (*** 핵심 ***)
+                    # >> 이 body가 유효한지(좌표가 0이 아닌지) 확인
+                    has_non_zero_coord = False
+                    for j in range(num_joints):
+                        line = f.readline() # joint info line
+                        if not line: break
+                        line_idx += 1
+                        
+                        if not has_non_zero_coord:
+                            try:
+                                joint_info = line.strip().split()
+                                if any(float(coord) != 0.0 for coord in joint_info[:3]):
+                                    has_non_zero_coord = True
+                            except (ValueError, IndexError):
+                                continue
+                    
+                    # >> 유효한 데이터를 가진 body_id만 카운트
+                    if has_non_zero_coord:
+                        body_id_counts[body_id] = body_id_counts.get(body_id, 0) + 1
+    except IOError as e:
+        print(f"Error during Pass 1 scan of {filepath}: {e}")
         return np.zeros((0, 2, BASE_NUM_JOINTS, 3))
 
 
-    # >>파이썬 리스트를 numpy 배열로 변환하여 반환한다.
-    return np.stack(frames_data)
+    # >> 카운트를 기준으로 ID 정렬 (등장 횟수가 많은 순)
+    sorted_body_ids = sorted(body_id_counts.items(), key=lambda item: item[1], reverse=True)
+    
+    body1_id = sorted_body_ids[0][0] if len(sorted_body_ids) > 0 else None
+    body2_id = sorted_body_ids[1][0] if len(sorted_body_ids) > 1 else None
+
+    # --- 2. 두 번째 스캔 (Pass 2): ID를 기준으로 (T, 2, 25, 3) 배열 채우기 ---
+    
+    final_coords = np.zeros((num_frames, 2, BASE_NUM_JOINTS, 3))
+    
+    try:
+        with open(filepath, 'r') as f:
+            f.readline()  # 첫 번째 프레임 수 라인 건너뛰기
+            
+            f_idx = 0
+            line_idx = 1
+            while f_idx < num_frames:
+                line = f.readline()
+                if not line: break
+                line_idx += 1
+                
+                try:
+                    num_bodies = int(line.strip())
+                except ValueError:
+                    continue # 1차 스캔에서 이미 경고함
+
+                for i in range(num_bodies):
+                    line = f.readline() # body info line
+                    if not line: break
+                    line_idx += 1
+                    
+                    body_info = line.strip().split()
+                    if len(body_info) < 1: continue
+
+                    current_body_id = body_info[0]
+                    
+                    line = f.readline() # num joints line
+                    if not line: break
+                    line_idx += 1
+                    
+                    try:
+                        num_joints = int(line.strip())
+                    except ValueError:
+                        num_joints = 0
+
+                    target_person_idx = -1
+                    if current_body_id == body1_id:
+                        target_person_idx = 0
+                    elif current_body_id == body2_id:
+                        target_person_idx = 1
+                    
+                    for j in range(num_joints):
+                        line = f.readline() # joint info line
+                        if not line: break
+                        line_idx += 1
+                        
+                        if target_person_idx != -1 and j < BASE_NUM_JOINTS:
+                            try:
+                                joint_info = line.strip().split()
+                                x, y, z = map(float, joint_info[:3])
+                                final_coords[f_idx, target_person_idx, j] = [x, y, z]
+                            except (ValueError, IndexError):
+                                continue
+                
+                # ##---------------------------------------------------------------
+                # ## [핵심 수정 사항]
+                # ## 프레임(f_idx) 단위로 데이터 복사 로직을 수행합니다.
+                # ##---------------------------------------------------------------
+                
+                # 현재 프레임(f_idx)에 P0 또는 P1 데이터가 있는지 확인합니다.
+                # np.any()는 0이 아닌 값이 하나라도 있으면 True를 반환합니다.
+                person0_valid = np.any(final_coords[f_idx, 0, :, :]) 
+                person1_valid = np.any(final_coords[f_idx, 1, :, :])
+
+                # Case 1: P0(사람 0)만 있고 P1(사람 1)이 없음 -> P0을 P1로 복사
+                if person0_valid and not person1_valid:
+                    final_coords[f_idx, 1, :, :] = final_coords[f_idx, 0, :, :]
+                # Case 2: P1만 있고 P0이 없음 -> P1을 P0로 복사
+                elif not person0_valid and person1_valid:
+                    final_coords[f_idx, 0, :, :] = final_coords[f_idx, 1, :, :]
+                # Case 3: 둘 다 있거나 (2명), 둘 다 없으면 (빈 프레임) -> 아무것도 안 함 (0 유지)
+
+                f_idx += 1
+    except IOError as e:
+        print(f"Error during Pass 2 scan of {filepath}: {e}")
+        # 데이터가 일부만 채워졌을 수 있으므로 빈 배열 반환
+        return np.zeros((0, 2, BASE_NUM_JOINTS, 3))
+
+    # [수정됨]
+    # >> 아래의 파일 단위 복사 로직은 프레임 단위 로직으로 대체되었으므로 주석 처리합니다.
+    # if body2_id is None and body1_id is not None:
+    #     final_coords[:, 1, :, :] = final_coords[:, 0, :, :]
+
+    return final_coords
 
 
 
@@ -166,7 +275,7 @@ def _normalize_by_bone_length(coords):
     return normalized_coords
 
 # ## ------------------------------------------------------------------------------
-# [신규] 두 3D 벡터 배치 간의 각도를 계산하는 헬퍼 함수
+# 두 3D 벡터 배치 간의 각도를 계산하는 헬퍼 함수
 # vec1, vec2 shape: (T, 2, 3) -> angle shape: (T, 2)
 # ## ------------------------------------------------------------------------------
 def _calculate_angle_between_vectors(vec1, vec2):
@@ -184,7 +293,7 @@ def _calculate_angle_between_vectors(vec1, vec2):
 
 
 # ## ------------------------------------------------------------------------------
-# [수정됨] 좌표로부터 동적 특징(7D)과 정적 특징(2D)을 계산한다.
+# 좌표로부터 동적 특징(7D)과 정적 특징(2D)을 계산한다.
 # shape: (num_frames, 50, 9)
 # (50 = 25관절 * 2명, 9 = 거리(1) + 방향(3) + 가속도(3) + 뼈길이(1) + 관절각도(1))
 # ## ------------------------------------------------------------------------------
@@ -194,6 +303,28 @@ def _calculate_features(coords):
     if T == 0:
         # >> 빈 프레임이면 (0, 50, 9) 형태의 빈 배열 반환
         return np.zeros((0, NUM_JOINTS, config.NUM_COORDS))
+
+    # --- [신규] 'Bad Frame' 마스크 준비 ---
+    # >> 뼈 길이를 정규화하기 위한 기준 척추 길이 계산
+    SPINE_SHOULDER_JOINT = 20
+    SPINE_BASE_JOINT = 0
+    ref_joint1 = coords[:, :, SPINE_SHOULDER_JOINT:SPINE_SHOULDER_JOINT+1, :]
+    ref_joint2 = coords[:, :, SPINE_BASE_JOINT:SPINE_BASE_JOINT+1, :]
+    
+    # [수정] +1e-8을 제거하고 순수한 길이를 계산합니다.
+    # (T, 2, 1, 1)
+    torso_lengths = np.linalg.norm(ref_joint1 - ref_joint2, axis=-1, keepdims=True)
+    
+    # [신규] 유효성 마스크 생성
+    # 몸통 길이가 최소 1cm (0.01m) 이상인 프레임/사람만 유효하다고 간주
+    MIN_TORSO_LENGTH = 0.01 
+    valid_mask = (torso_lengths > MIN_TORSO_LENGTH).astype(np.float32)
+
+    # [신규] 0으로 나누는 것을 방지하기 위한 '안전한' 버전의 척추 길이
+    # (이 값은 나중에 마스킹되어 0으로 처리되므로, 1e-8 대신 1.0을 더해도 무방하나, 
+    #  일관성을 위해 1e-8을 더합니다)
+    safe_torso_lengths = torso_lengths + 1e-8 
+    safe_torso_lengths_squeezed = safe_torso_lengths.squeeze() # (T, 2)
 
     # --- 1. (기존) 동적 특징 계산 (7D) ---
     
@@ -220,16 +351,9 @@ def _calculate_features(coords):
     dynamic_features = np.concatenate((distance, direction, acceleration), axis=-1)
 
 
-    # --- 2. [신규] 정적 특징 계산 (2D) ---
+    # --- 2. 정적 특징 계산 (2D) ---
     
     # >> 2-1. 뼈 길이 특징 (1D)
-    # >> 뼈 길이를 정규화하기 위한 기준 척추 길이 계산
-    SPINE_SHOULDER_JOINT = 20
-    SPINE_BASE_JOINT = 0
-    ref_joint1 = coords[:, :, SPINE_SHOULDER_JOINT:SPINE_SHOULDER_JOINT+1, :]
-    ref_joint2 = coords[:, :, SPINE_BASE_JOINT:SPINE_BASE_JOINT+1, :]
-    # (T, 2, 1, 1)
-    torso_lengths = np.linalg.norm(ref_joint1 - ref_joint2, axis=-1, keepdims=True) + 1e-8
     
     # >> (T, 2, 25, 1) 크기의 0 벡터 초기화
     bone_length_features = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
@@ -239,8 +363,10 @@ def _calculate_features(coords):
         bone_vec = coords[:, :, child, :] - coords[:, :, parent, :]
         # >> 뼈 길이 계산 (T, 2, 1)
         bone_len = np.linalg.norm(bone_vec, axis=-1, keepdims=True)
-        # >> 정규화된 뼈 길이 (T, 2, 1)
-        norm_len = bone_len / torso_lengths.squeeze(-1)
+        
+        # [수정] 0으로 나누는 것을 방지하는 '안전한' 척추 길이로 나눔
+        norm_len = bone_len / safe_torso_lengths.squeeze(-1)
+        
         # >> 자식(child) 관절의 특징 채널에 정규화된 뼈 길이 값을 할당
         bone_length_features[:, :, child, 0] = norm_len.squeeze(-1)
 
@@ -269,8 +395,7 @@ def _calculate_features(coords):
         joint_angle_features[:, :, j_idx, 0] = angle
         
 
-    # --- 3. [신규] 몸통 기준 상대 각도 (2D) ---
-    # (Pointing 동작 등 전역 방향성 문제를 해결하기 위함)
+    # --- 3. 몸통 기준 상대 각도 (2D) ---
     
     # >> 3-1. 몸통 좌표계 기준 벡터 3개 정의 (T, 2, 3)
     torso_Y_vec = coords[:, :, 20, :] - coords[:, :, 0, :]  # Y축 (위쪽)
@@ -312,8 +437,7 @@ def _calculate_features(coords):
     rel_angle_Z_feat[:, :, 13, 0] = angle_r_thigh_Z
     rel_angle_Z_feat[:, :, 17, 0] = angle_l_thigh_Z
 
-    # --- 4. [신규] 비-인접 관절 거리 (2D) ---
-    # (Clapping 등 팔/다리 상호작용을 파악하기 위함)
+    # --- 4. 비-인접 관절 거리 (2D) ---
 
     # >> 4-1. 거리 계산
     dist_hands_vec = coords[:, :, 7, :] - coords[:, :, 11, :] # 오른손 - 왼손
@@ -328,11 +452,12 @@ def _calculate_features(coords):
     dist_lh_lf = np.linalg.norm(dist_lh_lf_vec, axis=-1)
 
     # >> 4-2. 척추 길이로 정규화
-    torso_lengths_squeezed = torso_lengths.squeeze() # (T, 2)
-    norm_dist_hands = dist_hands / torso_lengths_squeezed
-    norm_dist_feet = dist_feet / torso_lengths_squeezed
-    norm_dist_rh_rf = dist_rh_rf / torso_lengths_squeezed
-    norm_dist_lh_lf = dist_lh_lf / torso_lengths_squeezed
+    
+    # [수정] 0으로 나누는 것을 방지하는 '안전한' 척추 길이로 나눔
+    norm_dist_hands = dist_hands / safe_torso_lengths_squeezed
+    norm_dist_feet = dist_feet / safe_torso_lengths_squeezed
+    norm_dist_rh_rf = dist_rh_rf / safe_torso_lengths_squeezed
+    norm_dist_lh_lf = dist_lh_lf / safe_torso_lengths_squeezed
 
     # >> 4-3. 특징 채널에 할당 (2개의 새로운 채널 생성)
     inter_dist_feat_1 = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
@@ -343,7 +468,7 @@ def _calculate_features(coords):
     inter_dist_feat_2[:, :, 7, 0] = norm_dist_rh_rf  # 오른손
     inter_dist_feat_2[:, :, 11, 0] = norm_dist_lh_lf # 왼손
 
-    # --- 5. [신규] 모든 특징 결합 (9D + 4D = 13D) ---
+    # --- 5. 모든 특징 결합 (9D + 4D = 13D) ---
     combined_features_per_person = np.concatenate(
         (dynamic_features,      # 7D
          bone_length_features,  # 1D
@@ -356,6 +481,11 @@ def _calculate_features(coords):
         axis=-1
     ) # shape: (T, 2, 25, 13)
 
+    # --- [신규] 최종 마스킹 ---
+    # 유효하지 않은(몸통 길이 < 1cm) 프레임/사람의 모든 특징을 0으로 설정
+    # valid_mask shape은 (T, 2, 1, 1)이며, 브로드캐스팅을 통해 (T, 2, 25, 13)에 적용됩니다.
+    combined_features_per_person = combined_features_per_person * valid_mask
+
     
     person1_features = combined_features_per_person[:, 0, :, :]
     person2_features = combined_features_per_person[:, 1, :, :]
@@ -364,6 +494,17 @@ def _calculate_features(coords):
     final_features = np.concatenate((person1_features, person2_features), axis=1)
     
     return final_features
+
+
+
+
+
+
+
+
+
+
+
 
 # 'calculate_and_save_stats'를 위한 일꾼(worker) 함수
 def process_file_for_stats(filename):
@@ -382,7 +523,7 @@ def process_file_for_stats(filename):
 
     downsampled_coords = coords[::2, :, :, :]
     
-    # >> [수정됨] 13차원 특징을 반환
+    # >> 13차원 특징을 반환
     features = _calculate_features(downsampled_coords)
     
     valid_frames = features.reshape(-1, features.shape[-1])

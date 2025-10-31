@@ -216,6 +216,7 @@ class PositionalEncoding(nn.Module):
 class StandardTransformerBlock(nn.Module):
     def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256, use_gcn=True):
         super().__init__()
+        self.out_features = out_features
         # >> 1. Shift-GCN 사용 여부를 결정한다.
         self.use_gcn = use_gcn
         if self.use_gcn:
@@ -246,7 +247,7 @@ class StandardTransformerBlock(nn.Module):
     def forward(self, x):
         # x shape: (N, T, J, C)
         N, T, J, C_in = x.shape
-        C_out = self.gcn.weight.shape[-1]
+        C_out = self.out_features
         
 
         # >> 잔차 연결을 위해 초기 입력을 저장한다.
@@ -293,6 +294,8 @@ class StandardTransformerBlock(nn.Module):
 class ST_Transformer_Block(nn.Module):
     def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256, use_gcn=True):
         super().__init__()
+        self.out_features = out_features
+        
         # >> 1. Shift-GCN 사용 여부를 결정한다.
         self.use_gcn = use_gcn
         if self.use_gcn:
@@ -330,7 +333,7 @@ class ST_Transformer_Block(nn.Module):
 
     def forward(self, x):
         # x shape: (N, T, J, C)
-        N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.gcn.weight.shape[-1]
+        N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.out_features
         
         # >> 잔차 연결을 위해 초기 입력을 저장한다.
         res = self.residual(x)
@@ -411,13 +414,14 @@ class GCNTransformerModel(nn.Module):
         self.blocks_full = nn.ModuleList()
         self.blocks_half = nn.ModuleList()
 
+
         # >> layer_dims 리스트를 기반으로 반복문을 실행하여 블록을 쌓는다.
         # >> 1. 공유 블록 생성
         for i in range(num_shared_blocks):
             in_dim = layer_dims[i]
             out_dim = layer_dims[i+1]
             self.shared_blocks.append(
-                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn)
+                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn=True)
             )
 
         # >> 2. 분기 블록 생성
@@ -427,11 +431,11 @@ class GCNTransformerModel(nn.Module):
             
             # Full-scale 경로용 블록
             self.blocks_full.append(
-                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn)
+                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn=False)
             )
             # Half-scale 경로용 블록 (가중치를 공유하지 않는 별개의 인스턴스)
             self.blocks_half.append(
-                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn)
+                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn=False)
             )
 
         # >> 출력 부분 처리
@@ -447,7 +451,7 @@ class GCNTransformerModel(nn.Module):
             nn.GELU(),
             RMSNorm(128)
         )
-
+        self.temporal_pool = nn.AvgPool2d(kernel_size=(2, 1), stride=(2,1))
         
         # >> 과적합 방지를 위한 Dropout이다.
         self.dropout = nn.Dropout(p=config.DROPOUT)
@@ -505,7 +509,12 @@ class GCNTransformerModel(nn.Module):
 
         # >> 3-2. 경로 분기
         x_full = x_shared # (N, 150, J, 128)
-        x_half = x_shared[:, ::2, :, :].contiguous() # (N, 75, J, 128)
+
+        x_permuted = x_shared.permute(0, 3, 1, 2)
+
+        x_half_pooled = self.temporal_pool(x_permuted)
+        
+        x_half = x_half_pooled.permute(0, 2, 3, 1).contiguous()
 
         # >> 3-3. 각 경로별 독립 블록 통과
         for block in self.blocks_full:
