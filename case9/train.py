@@ -272,8 +272,8 @@ def main():
     set_seed(config.SEED)
     print(f"Seed fixed to {config.SEED}")
 
-    LR_DROP_PATIENCE = 4 # 2번 연속 성능 향상이 없으면 LR 감소
-    MAX_LR_DROPS = 2     # LR 감소 최대 횟수
+    LR_DROP_PATIENCE = 100 # 3번 연속 성능 향상이 없으면 LR 감소
+    MAX_LR_DROPS = 100     # LR 감소 최대 횟수
 
     # >> 학습에 사용할 장치(CPU 또는 GPU)를 설정한다.
     device = config.DEVICE

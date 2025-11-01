@@ -292,7 +292,7 @@ class StandardTransformerBlock(nn.Module):
 # 순차적으로 Transformer 어텐션을 적용하여 시공간 특징을 분리하여 학습한다.
 # ## -------------------------------------------------------------------------
 class ST_Transformer_Block(nn.Module):
-    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256, use_gcn=True):
+    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256, use_gcn=True, dropout=config.DROPOUT):
         super().__init__()
         self.out_features = out_features
         
@@ -306,7 +306,7 @@ class ST_Transformer_Block(nn.Module):
         # >> 2. 공간적 어텐션을 위한 Transformer 인코더이다.
         spatial_encoder_layer = nn.TransformerEncoderLayer(
             d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
-            activation='gelu', batch_first=True, dropout=0.1
+            activation='gelu', batch_first=True, dropout=dropout
         )
         self.spatial_transformer_encoder = nn.TransformerEncoder(spatial_encoder_layer, num_layers=1)
         self.norm_spatial = RMSNorm(out_features)
@@ -315,11 +315,12 @@ class ST_Transformer_Block(nn.Module):
         # >> 3. 시간적 어텐션을 위한 Transformer 인코더이다.
         temporal_encoder_layer = nn.TransformerEncoderLayer(
             d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
-            activation='gelu', batch_first=True, dropout=0.1
+            activation='gelu', batch_first=True, dropout=dropout
         )
         self.temporal_transformer_encoder = nn.TransformerEncoder(temporal_encoder_layer, num_layers=1)
         self.norm_temporal = RMSNorm(out_features)
-        
+
+        self.dropout = nn.Dropout(dropout)
 
         # >> 입력과 출력의 채널 수가 다를 경우를 위한 잔차 연결이다.
         if in_features != out_features:
@@ -376,7 +377,7 @@ class ST_Transformer_Block(nn.Module):
 
 
         # >> 4. 최종 잔차 연결을 한다.
-        x_final = x_temporal_out + res
+        x_final = self.dropout(x_temporal_out + res)
 
         return x_final
     
@@ -392,7 +393,8 @@ class GCNTransformerModel(nn.Module):
                  block_type ='standard',
                  layer_dims = config.LAYER_DIMS,
                  use_gcn = True,
-                 num_shared_blocks = 1
+                 num_shared_blocks = 1,
+                 dropout=config.DROPOUT
                  ):
         super().__init__()
 
@@ -421,7 +423,7 @@ class GCNTransformerModel(nn.Module):
             in_dim = layer_dims[i]
             out_dim = layer_dims[i+1]
             self.shared_blocks.append(
-                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn=True)
+                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn=use_gcn)
             )
 
         # >> 2. 분기 블록 생성
@@ -431,11 +433,11 @@ class GCNTransformerModel(nn.Module):
             
             # Full-scale 경로용 블록
             self.blocks_full.append(
-                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn=False)
+                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn=use_gcn, dropout=config.DROPOUT)
             )
             # Half-scale 경로용 블록 (가중치를 공유하지 않는 별개의 인스턴스)
             self.blocks_half.append(
-                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn=False)
+                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn=use_gcn, dropout=config.DROPOUT)
             )
 
         # >> 출력 부분 처리
@@ -459,20 +461,22 @@ class GCNTransformerModel(nn.Module):
         self.fc = nn.Linear(128, num_classes)
 
     # >> Helper 함수
-    def _create_block(self, block_type, in_dim, out_dim, num_joints, use_gcn):
+    def _create_block(self, block_type, in_dim, out_dim, num_joints, use_gcn, dropout=config.DROPOUT):
         if block_type == 'standard':
             block = StandardTransformerBlock(
                 in_features=in_dim, 
                 out_features=out_dim, 
                 num_joints=num_joints,
-                use_gcn=use_gcn
+                use_gcn=use_gcn,
+                dropout=dropout
             )
         elif block_type == 'st':
             block = ST_Transformer_Block(
                 in_features=in_dim, 
                 out_features=out_dim, 
                 num_joints=num_joints,
-                use_gcn=use_gcn
+                use_gcn=use_gcn,
+                dropout=dropout
             )
         else:
             raise ValueError(f"Unknown block_type: {block_type}")
