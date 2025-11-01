@@ -25,9 +25,7 @@ def evaluate_model(checkpoint_path):
 
     # --- 모델 초기화 및 체크포인트 로드 ---
     model = GCNTransformerModel(
-        block_type=config.BLOCK_TYPE,
-        layer_dims=config.LAYER_DIMS,
-        use_gcn=config.USE_GCN
+        layer_dims=config.LAYER_DIMS
     ).to(config.DEVICE)
     
     load_checkpoint(checkpoint_path, model, device=config.DEVICE)

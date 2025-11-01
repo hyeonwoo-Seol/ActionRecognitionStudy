@@ -43,10 +43,6 @@ from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 # python train.py --scheduler cosine_restarts
 # ## ----------------------------------------------------
 def get_scheduler(optimizer, scheduler_name, total_epochs, warmup_epochs):
-    # >> optimizer: 적용할 옵티마이저
-    # >> scheduler_name: 사용할 스케줄러 이름 ('cosine_decay' 또는 'cosine_restarts')
-    # >> total_epochs: 총 학습 에폭 수
-    # >> warmup_epochs: 웜업 에폭 수
     print(f"Using '{scheduler_name}' scheduler.")
 
     # >> 1. 웜업 스케줄러는 공통으로 사용한다.
@@ -320,9 +316,7 @@ def main():
 
     # >> GCN-Transformer 모델을 초기화하고 지정된 장치로 이동시킨다.
     model = GCNTransformerModel(
-        block_type = config.BLOCK_TYPE,
-        layer_dims = config.LAYER_DIMS,
-        use_gcn = config.USE_GCN
+        layer_dims = config.LAYER_DIMS
     ).to(device)
     
 

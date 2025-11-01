@@ -29,9 +29,7 @@ def evaluate_ensemble(checkpoint_dir):
     # --- 모델 초기화 ---
     # 모델은 한 번만 생성하고, 가중치만 바꿔가며 로드합니다.
     model = GCNTransformerModel(
-        block_type=config.BLOCK_TYPE,
-        layer_dims=config.LAYER_DIMS,
-        use_gcn=config.USE_GCN
+        layer_dims=config.LAYER_DIMS
     ).to(config.DEVICE)
     model.eval()
     

@@ -39,10 +39,6 @@ ETA_MIN = 1e-6
 T_0 = 100 # 15에폭마다 학습률이 최대치로 초기화된다.
 T_MULT = 1 # 2로 설정된 경우, 15에폭 다음에 학습률 초기화는 2배인 30에폭이다.
 
-# >> block_type, layer_dims, use_gcn를 설정한다.
-# >> block_type='st' : Shift-GCN + ST-Transformer, block_type='standard' : Shift-GCN + Transformer
-# >> gcn 사용 여부는 use_gcn을 True, False로 지정한다.
 # >> layer_dims 사용법은, [입력 크기, 출력 크기]이다. 만약 4층을 쌓으려면 [64, 128, 128, 256, 256] 하면 된다.
-BLOCK_TYPE = 'st'
 LAYER_DIMS = [64, 128, 128, 256]
-USE_GCN = True
+

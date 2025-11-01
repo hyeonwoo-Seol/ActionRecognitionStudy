@@ -208,80 +208,6 @@ class PositionalEncoding(nn.Module):
 
 
 
-# ## --------------------------------------------------------------------
-# Standard Transformer Block
-# Shift-GCN으로 공간적 특징을 추출한 후,
-# 시간과 공간을 하나로 합친 시퀀스에 대해 표준 Transformer 어텐션을 적용한다.
-# ## --------------------------------------------------------------------
-class StandardTransformerBlock(nn.Module):
-    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256, use_gcn=True):
-        super().__init__()
-        # >> 1. Shift-GCN 사용 여부를 결정한다.
-        self.use_gcn = use_gcn
-        if self.use_gcn:
-            self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
-        
-        
-        # >> 2. 표준 Transformer 인코더이다.
-        # >> 공간과 시간 차원을 합친 전체 시퀀스에 대해 어텐션을 수행한다.
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=out_features, nhead=nhead, dim_feedforward=dim_feedforward,
-            activation='gelu', batch_first=True, dropout=0.1
-        )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
-        self.norm_gcn = RMSNorm(out_features)
-        self.norm_transformer = RMSNorm(out_features)
-
-
-        # >> 입력과 출력의 채널 수가 다를 경우를 위한 잔차 연결 코드이다.
-        if in_features != out_features:
-            self.residual = nn.Sequential(
-                nn.Linear(in_features, out_features),
-                RMSNorm(out_features)
-            )
-        else:
-            self.residual = nn.Identity()
-
-
-    def forward(self, x):
-        # x shape: (N, T, J, C)
-        N, T, J, C_in = x.shape
-        C_out = self.gcn.weight.shape[-1]
-        
-
-        # >> 잔차 연결을 위해 초기 입력을 저장한다.
-        res = self.residual(x)
-
-
-        # >> 1. use_gcn 플래그에 따라 GCN을 실행하거나 건너뛴다.
-        if self.use_gcn:
-            x_processed = self.gcn(x) 
-        else:
-            x_processed = res # GCN을 사용하지 않으면 입력을 그대로 사용한다.
-
-        x_gcn = self.norm_gcn(x_processed)
-        
-
-
-        # >> 2. 표준 Transformer 어텐션이다.
-        # >> (N, T, J, C) -> (N, T*J, C) 형태로 펼쳐서 하나의 시퀀스로 만든다.
-        x_flattened = x_gcn.contiguous().view(N, T * J, C_out)
-        
-
-        # >> Transformer 인코더는 (N, SeqLen, C) 형태의 입력을 받는다.
-        x_attn = self.transformer_encoder(x_flattened)
-        x_attn = self.norm_transformer(x_attn)
-        
-
-        # >> 원래 형태로 복원한다. (N, T*J, C) -> (N, T, J, C)
-        x_unflattened = x_attn.view(N, T, J, C_out)
-        
-
-        # >> 3. 최종 잔차 연결을 한다.
-        x_final = x_unflattened + res
-        
-        return x_final
-
 
 
 
@@ -291,12 +217,10 @@ class StandardTransformerBlock(nn.Module):
 # 순차적으로 Transformer 어텐션을 적용하여 시공간 특징을 분리하여 학습한다.
 # ## -------------------------------------------------------------------------
 class ST_Transformer_Block(nn.Module):
-    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256, use_gcn=True):
+    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
         super().__init__()
-        # >> 1. Shift-GCN 사용 여부를 결정한다.
-        self.use_gcn = use_gcn
-        if self.use_gcn:
-            self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
+        
+        self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
 
         self.norm_gcn = RMSNorm(out_features)
 
@@ -335,10 +259,7 @@ class ST_Transformer_Block(nn.Module):
         # >> 잔차 연결을 위해 초기 입력을 저장한다.
         res = self.residual(x)
         
-        if self.use_gcn:
-            x_processed = self.gcn(x)
-        else:
-            x_processed = res
+        x_processed = self.gcn(x)
 
         x_gcn = self.norm_gcn(x_processed)
         
@@ -386,10 +307,7 @@ class GCNTransformerModel(nn.Module):
                  num_joints = config.NUM_JOINTS,
                  num_coords = config.NUM_COORDS,
                  num_classes = config.NUM_CLASSES,
-                 block_type ='standard',
                  layer_dims = config.LAYER_DIMS,
-                 use_gcn = True,
-                 num_shared_blocks = 1
                  ):
         super().__init__()
 
@@ -405,45 +323,28 @@ class GCNTransformerModel(nn.Module):
         )
         
         # >> 동적으로 transformer 블록을 생성한다.
-        # self.blocks = nn.ModuleList()
+        self.blocks = nn.ModuleList()
 
-        self.shared_blocks = nn.ModuleList()
-        self.blocks_full = nn.ModuleList()
-        self.blocks_half = nn.ModuleList()
-
-        # >> layer_dims 리스트를 기반으로 반복문을 실행하여 블록을 쌓는다.
-        # >> 1. 공유 블록 생성
-        for i in range(num_shared_blocks):
+        for i in range(len(layer_dims) - 1):
             in_dim = layer_dims[i]
             out_dim = layer_dims[i+1]
-            self.shared_blocks.append(
-                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn)
-            )
-
-        # >> 2. 분기 블록 생성
-        for i in range(num_shared_blocks, len(layer_dims) - 1):
-            in_dim = layer_dims[i]
-            out_dim = layer_dims[i+1]
-            
-            # Full-scale 경로용 블록
-            self.blocks_full.append(
-                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn)
-            )
-            # Half-scale 경로용 블록 (가중치를 공유하지 않는 별개의 인스턴스)
-            self.blocks_half.append(
-                self._create_block(block_type, in_dim, out_dim, num_joints, use_gcn)
+            self.blocks.append(
+                ST_Transformer_Block(
+                    in_features=in_dim, 
+                    out_features=out_dim, 
+                    num_joints=num_joints
+                )
             )
 
         # >> 출력 부분 처리
         final_dim = layer_dims[-1]
 
         # >> 시퀀스 전체 정보를 하나의 벡터로 요약하는 Attention Pooling
-        self.attention_pool_full = AttentionPooling(d_model=final_dim) # <<< Full 경로용
-        self.attention_pool_half = AttentionPooling(d_model=final_dim) # <<< Half 경로용
+        self.attention_pool = AttentionPooling(d_model=final_dim)
 
         # >> 움직임 요약 벡터를 결합하기
-        self.fusion_layer = nn.Sequential(
-            nn.Linear(final_dim * 2, 128), # <<< 입력 크기 2배 (256*2 = 512)
+        self.classification_head = nn.Sequential(
+            nn.Linear(final_dim, 128),
             nn.GELU(),
             RMSNorm(128)
         )
@@ -454,25 +355,7 @@ class GCNTransformerModel(nn.Module):
         # >> 최종 클래스를 분류하는 층이다.
         self.fc = nn.Linear(128, num_classes)
 
-    # >> Helper 함수
-    def _create_block(self, block_type, in_dim, out_dim, num_joints, use_gcn):
-        if block_type == 'standard':
-            block = StandardTransformerBlock(
-                in_features=in_dim, 
-                out_features=out_dim, 
-                num_joints=num_joints,
-                use_gcn=use_gcn
-            )
-        elif block_type == 'st':
-            block = ST_Transformer_Block(
-                in_features=in_dim, 
-                out_features=out_dim, 
-                num_joints=num_joints,
-                use_gcn=use_gcn
-            )
-        else:
-            raise ValueError(f"Unknown block_type: {block_type}")
-        return block
+    
 
     def forward(self, motion_features):
         N, _, T, J = motion_features.shape
@@ -495,34 +378,14 @@ class GCNTransformerModel(nn.Module):
         
 
         # >> 3. GCN-Transformer 블록을 통과시킨다.
-        # for block in self.blocks:
-        #    x = block(x)
-
-        # >> 3-1. 공유 블록 통과
-        x_shared = x
-        for block in self.shared_blocks:
-            x_shared = block(x_shared) # 예: (N, 150, J, 128)
-
-        # >> 3-2. 경로 분기
-        x_full = x_shared # (N, 150, J, 128)
-        x_half = x_shared[:, ::2, :, :].contiguous() # (N, 75, J, 128)
-
-        # >> 3-3. 각 경로별 독립 블록 통과
-        for block in self.blocks_full:
-            x_full = block(x_full) # 최종: (N, 150, J, 256)
-            
-        for block in self.blocks_half:
-            x_half = block(x_half) # 최종: (N, 75, J, 256)
+        for block in self.blocks:
+            x = block(x)
 
         # >> 4. 동적 움직임 요약
-        summary_full = self.attention_pool_full(x_full) # (N, 256)
-        summary_half = self.attention_pool_half(x_half) # (N, 256)
+        motion_summary = self.attention_pool(x) # (N, final_dim)
 
-        # >> 5. 두 요약 벡터 결합
-        motion_summary = torch.cat([summary_full, summary_half], dim=1) # (N, 512)
-
-        # >> 6. 최종 분류를 수행다한
-        final_vector = self.fusion_layer(motion_summary)
+        # >> 5. 최종 분류
+        final_vector = self.classification_head(motion_summary) # (N, 128)
         final_vector = self.dropout(final_vector)
-        output = self.fc(final_vector)
+        output = self.fc(final_vector) # (N, num_classes)
         return output
