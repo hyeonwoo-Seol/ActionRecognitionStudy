@@ -26,6 +26,7 @@ BONE_LEN_CH, JOINT_ANG_CH = [4], [5]
 REL_ANG_CH = [6, 7]
 INTER_DIST_CH = [8, 9]
 INTERACTION_CH = [10]
+INTER_HAND_FOOT_CH = [11, 12, 13, 14]
 
 
 # ## ----------------------------------------------------------------------------------
@@ -138,7 +139,8 @@ class NTURGBDDataset(Dataset):
                 f_rel_ang = features[..., REL_ANG_CH] # (T, J, 2)
                 f_inter_dist = features[..., INTER_DIST_CH] # (T, J, 2)
                 f_interaction = features[..., INTERACTION_CH] # (T, J, 1)
-
+                f_inter_hand_foot = features[..., INTER_HAND_FOOT_CH] # (T, J, 4)
+                
                 # >> 3D 벡터 특징 (회전 함)
                 f_dir = features[..., DIR_CH]       # (T, J, 3)
                 # f_acc = features[..., ACC_CH]       # (T, J, 3)
@@ -156,7 +158,8 @@ class NTURGBDDataset(Dataset):
                 # >> 모든 특징을 원래 순서대로 다시 결합 (11D)
                 features = torch.cat([
                     f_dist, f_dir_rotated, f_len, f_ang, # f_acc_rotated 제거
-                    f_rel_ang, f_inter_dist, f_interaction
+                    f_rel_ang, f_inter_dist, f_interaction,
+                    f_inter_hand_foot
                 ], dim=-1) # (T, J, 10)
 
               
@@ -186,6 +189,8 @@ class NTURGBDDataset(Dataset):
 
                 # >> P0-P1 중심 거리에도 스케일링 적용
                 features[..., INTERACTION_CH] *= scale_factor
+
+                features[..., INTER_HAND_FOOT_CH] *= scale_factor
 
                 # >> 제외: 방향(단위벡터), 관절각도(각도), 상대각도(각도)
                 

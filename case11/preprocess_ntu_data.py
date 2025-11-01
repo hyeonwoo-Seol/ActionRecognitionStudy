@@ -304,29 +304,29 @@ def _calculate_features(coords):
         # >> 빈 프레임이면 (0, 50, 9) 형태의 빈 배열 반환
         return np.zeros((0, NUM_JOINTS, config.NUM_COORDS))
 
-    # --- [신규] 'Bad Frame' 마스크 준비 ---
+    # --- 'Bad Frame' 마스크 준비 ---
     # >> 뼈 길이를 정규화하기 위한 기준 척추 길이 계산
     SPINE_SHOULDER_JOINT = 20
     SPINE_BASE_JOINT = 0
     ref_joint1 = coords[:, :, SPINE_SHOULDER_JOINT:SPINE_SHOULDER_JOINT+1, :]
     ref_joint2 = coords[:, :, SPINE_BASE_JOINT:SPINE_BASE_JOINT+1, :]
     
-    # [수정] +1e-8을 제거하고 순수한 길이를 계산합니다.
+    #  +1e-8을 제거하고 순수한 길이를 계산합니다.
     # (T, 2, 1, 1)
     torso_lengths = np.linalg.norm(ref_joint1 - ref_joint2, axis=-1, keepdims=True)
     
-    # [신규] 유효성 마스크 생성
+    #  유효성 마스크 생성
     # 몸통 길이가 최소 1cm (0.01m) 이상인 프레임/사람만 유효하다고 간주
     MIN_TORSO_LENGTH = 0.01 
     valid_mask = (torso_lengths > MIN_TORSO_LENGTH).astype(np.float32)
 
-    # [신규] 0으로 나누는 것을 방지하기 위한 '안전한' 버전의 척추 길이
+    # 0으로 나누는 것을 방지하기 위한 '안전한' 버전의 척추 길이
     # (이 값은 나중에 마스킹되어 0으로 처리되므로, 1e-8 대신 1.0을 더해도 무방하나, 
     #  일관성을 위해 1e-8을 더합니다)
     safe_torso_lengths = torso_lengths + 1e-8 
     safe_torso_lengths_squeezed = safe_torso_lengths.squeeze() # (T, 2)
 
-    # --- 1. (기존) 동적 특징 계산 (7D) ---
+    # --- 1. 동적 특징 계산 (7D) ---
     
     # >> 스켈레톤 중심화
     center_joint = coords[:, :, 0:1, :]
@@ -453,7 +453,7 @@ def _calculate_features(coords):
 
     # >> 4-2. 척추 길이로 정규화
     
-    # [수정] 0으로 나누는 것을 방지하는 '안전한' 척추 길이로 나눔
+    # 0으로 나누는 것을 방지하는 '안전한' 척추 길이로 나눔
     norm_dist_hands = dist_hands / safe_torso_lengths_squeezed
     norm_dist_feet = dist_feet / safe_torso_lengths_squeezed
     norm_dist_rh_rf = dist_rh_rf / safe_torso_lengths_squeezed
@@ -494,8 +494,36 @@ def _calculate_features(coords):
 
     # >> 5-5. P0용 특징 배열과 P1용 특징 배열을 스택 (T, 2, 25, 1)
     interaction_feat_dist = np.stack([norm_center_dist_p0_broadcast, norm_center_dist_p1_broadcast], axis=1)
+
+    # ## -----------------------------------------------------------------
+    # ## --- 6. P0-P1 손/발 상호작용 거리 (4D) ---
+    # ## -----------------------------------------------------------------
     
-    # --- 5. 모든 특징 결합 (10D + 1D = 11D) ---
+    # (T,) 형태의 거리 계산
+    dist_rh_rh = np.linalg.norm(coords[:, 0, 7, :] - coords[:, 1, 7, :], axis=-1) # P0 오른손 - P1 오른손
+    dist_lh_lh = np.linalg.norm(coords[:, 0, 11, :] - coords[:, 1, 11, :], axis=-1) # P0 왼손 - P1 왼손
+    dist_rf_rf = np.linalg.norm(coords[:, 0, 15, :] - coords[:, 1, 15, :], axis=-1) # P0 오른발 - P1 오른발
+    dist_lf_lf = np.linalg.norm(coords[:, 0, 19, :] - coords[:, 1, 19, :], axis=-1) # P0 왼발 - P1 왼발
+
+    # (T,)
+    safe_torso_p0 = safe_torso_lengths_squeezed[:, 0] 
+    safe_torso_p1 = safe_torso_lengths_squeezed[:, 1]
+
+    # (T, 2, 25, 1) 특징을 생성하는 내부 헬퍼 함수 정의
+    def _create_inter_feat(dist_val, torso_p0, torso_p1):
+        norm_dist_p0 = (dist_val / torso_p0)[..., np.newaxis]
+        norm_dist_p1 = (dist_val / torso_p1)[..., np.newaxis]
+        norm_dist_p0_b = np.broadcast_to(norm_dist_p0[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
+        norm_dist_p1_b = np.broadcast_to(norm_dist_p1[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
+        return np.stack([norm_dist_p0_b, norm_dist_p1_b], axis=1)
+
+    # 4개의 새로운 특징 채널 생성
+    inter_feat_rh_rh = _create_inter_feat(dist_rh_rh, safe_torso_p0, safe_torso_p1)
+    inter_feat_lh_lh = _create_inter_feat(dist_lh_lh, safe_torso_p0, safe_torso_p1)
+    inter_feat_rf_rf = _create_inter_feat(dist_rf_rf, safe_torso_p0, safe_torso_p1)
+    inter_feat_lf_lf = _create_inter_feat(dist_lf_lf, safe_torso_p0, safe_torso_p1)
+    
+    # --- 7. 모든 특징 결합 (11D + 4D = 15D) ---
     combined_features_per_person = np.concatenate(
         (dynamic_features,      # 4D
          bone_length_features,  # 1D
@@ -504,12 +532,16 @@ def _calculate_features(coords):
          rel_angle_Z_feat,      # 1D
          inter_dist_feat_1,     # 1D
          inter_dist_feat_2,     # 1D
-         interaction_feat_dist  # 1D
+         interaction_feat_dist, # 1D
+         inter_feat_rh_rh,      # 1D (신규)
+         inter_feat_lh_lh,      # 1D (신규)
+         inter_feat_rf_rf,      # 1D (신규)
+         inter_feat_lf_lf       # 1D (신규)
         ), 
         axis=-1
-    ) # shape: (T, 2, 25, 11)
+    ) # shape: (T, 2, 25, 15)
 
-    # --- [신규] 최종 마스킹 ---
+    # --- 최종 마스킹 ---
     # 유효하지 않은(몸통 길이 < 1cm) 프레임/사람의 모든 특징을 0으로 설정
     # valid_mask shape은 (T, 2, 1, 1)이며, 브로드캐스팅을 통해 (T, 2, 25, 11)에 적용됩니다.
     combined_features_per_person = combined_features_per_person * valid_mask
@@ -536,7 +568,6 @@ def _calculate_features(coords):
 
 # 'calculate_and_save_stats'를 위한 일꾼(worker) 함수
 def process_file_for_stats(filename):
-    """파일 하나를 받아 통계 계산에 필요한 특징(feature)을 반환합니다."""
     if not filename.endswith('.skeleton'):
         return None  # .skeleton 파일이 아니면 None 반환
 
@@ -551,14 +582,22 @@ def process_file_for_stats(filename):
 
     downsampled_coords = coords[::2, :, :, :]
     
-    # >> 13차원 특징을 반환
+    # >> 15차원 특징을 반환
     features = _calculate_features(downsampled_coords)
     
     valid_frames = features.reshape(-1, features.shape[-1])
     valid_frames = valid_frames[np.abs(valid_frames).sum(axis=1) > 1e-6]
     
     if valid_frames.shape[0] > 0:
-        return valid_frames # 계산된 특징을 반환
+        # 특징 배열 전체를 반환하는 대신,
+        # (개수, 합계, 제곱의 합)을 계산하여 반환합니다.
+        count = valid_frames.shape[0]
+        # (N, 15) -> (15,)
+        sum_val = np.sum(valid_frames, axis=0) 
+        # (N, 15) -> (15,)
+        sum_sq_val = np.sum(np.square(valid_frames), axis=0) 
+        
+        return (count, sum_val, sum_sq_val)
     else:
         return None
 
@@ -570,14 +609,19 @@ def process_file_for_stats(filename):
 # ## ------------------------------------------------------------------------------
 def calculate_and_save_stats():
     print("--- 1단계: 훈련 데이터셋 통계치 계산 시작 ---")
-    all_features = [] # 모든 훈련 데이터의 특징을 저장할 리스트
+    # all_features 리스트 대신 누적 변수 초기화
+    total_count = 0
+    total_sum = np.zeros(config.NUM_COORDS)    # (15,) 크기 0배열
+    total_sum_sq = np.zeros(config.NUM_COORDS) # (15,) 크기 0배열
+
+    
     filenames = os.listdir(SOURCE_DATA_PATH)
 
     # 사용할 CPU 코어 수를 정합니다.
     num_cores = cpu_count() - 1 if cpu_count() > 1 else 1
     print(f"Using {num_cores} cores for stats calculation...")
 
-    all_features = []
+    
     # 멀티프로세싱 Pool을 생성하고 작업을 분배합니다.
     with Pool(processes=num_cores) as pool:
         # pool.imap_unordered를 사용하여 작업을 병렬 처리하고 tqdm으로 진행률 표시
@@ -586,15 +630,33 @@ def calculate_and_save_stats():
         # 반환된 결과(None이 아닌 것)를 all_features 리스트에 추가
         for result in tqdm(results_iterator, total=len(filenames), desc="[Calculating Stats]"):
             if result is not None:
-                all_features.append(result)
+                # 튜플을 unpack
+                count, sum_val, sum_sq_val = result
+                
+                # 값 누적
+                total_count += count
+                total_sum += sum_val
+                total_sum_sq += sum_sq_val
 
-    # >> 모든 특징 데이터를 하나의 큰 numpy 배열로 결합합니다.
-    all_features_np = np.concatenate(all_features, axis=0)
+    if total_count == 0:
+        print("치명적 오류: 유효한 훈련 데이터를 찾을 수 없습니다. 통계 계산 실패.")
+        mean = np.zeros(config.NUM_COORDS)
+        std_raw = np.ones(config.NUM_COORDS)
+    else:
+        # E[X] = 총합 / 개수
+        mean = total_sum / total_count
+        
+        # E[X^2] = 제곱의 총합 / 개수
+        mean_of_sq = total_sum_sq / total_count
+        
+        # Var(X) = E[X^2] - (E[X])^2 (분산)
+        variance = mean_of_sq - np.square(mean)
+        
+        # StdDev(X) = sqrt(Var(X)) (표준편차)
+        # 부동소수점 오류로 인해 variance가 아주 작은 음수가 되는 것을 방지
+        std_raw = np.sqrt(np.maximum(variance, 0.0))
 
-    # >> 평균과 표준편차를 계산합니다.
-    mean = np.mean(all_features_np, axis=0)
-    std_raw = np.std(all_features_np, axis=0)
-
+    # >> 표준편차가 0에 가까운 값을 clip
     epsilon = 1e-6
     std = np.clip(std_raw, a_min=epsilon, a_max=None)
 
