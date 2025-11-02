@@ -15,7 +15,7 @@ SEED = 42
 
 # >> 데이터 로더 설정
 MAX_FRAMES = 150  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
-BATCH_SIZE = 16   # 배치 크기
+BATCH_SIZE = 28   # 배치 크기
 NUM_WORKERS = 6   # 데이터를 불러올 때 사용할 CPU 프로세서 수 
 PIN_MEMORY = True # GPU 사용 시 데이터 전송 속도를 높이기 위한 설정
 
