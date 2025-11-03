@@ -358,17 +358,19 @@ class SlowFast_GCNTransformer(nn.Module):
 
         # --- 3. Lateral Connection (Fast -> Slow 융합) ---
         
-        # >> Fast 경로의 (N, C_fast, T_fast, J) 특징을
-        # >> Slow 경로의 (N, C_slow, T_slow, J) 특징으로 변환합니다.
-        # >> 2D Conv를 사용하여 시간축(T)을 1/2로 줄이고(stride=2),
-        # >> 채널(C)을 Fast에서 Slow에 맞게 늘려줍니다.
-        self.lateral_connection = nn.Conv2d(
-            in_channels=fast_dims[0],    # Fast 경로의 첫 번째 채널 수
-            out_channels=slow_dims[0],   # Slow 경로의 첫 번째 채널 수
-            kernel_size=(5, 1),      # (Temporal_Kernel=5, Spatial_Kernel=1)
-            stride=(2, 1),           # (Temporal_Stride=2, Spatial_Stride=1)
-            padding=(2, 0)           # (Temporal_Padding=2, Spatial_Padding=0)
-        )
+        # >> DIMS 설정에 맞춰 동적으로 다단 융합 레이어를 생성합니다.
+        # >> (len(fast_dims) - 1) 만큼의 융합 레이어가 생성됩니다.
+        self.lateral_connections = nn.ModuleList()
+        for i in range(len(self.fast_dims) - 1):
+            self.lateral_connections.append(
+                nn.Conv2d(
+                    in_channels=self.fast_dims[i],    # Fast 경로의 i번째 특징 (블록 입력)
+                    out_channels=self.slow_dims[i],   # Slow 경로의 i번째 특징 (블록 입력)
+                    kernel_size=(5, 1),      # (Temporal_Kernel=5, Spatial_Kernel=1)
+                    stride=(2, 1),           # (Temporal_Stride=2, Spatial_Stride=1)
+                    padding=(2, 0)           # (Temporal_Padding=2, Spatial_Padding=0)
+                )
+            )
 
         # --- 4. Final Classification (최종 분류) ---
         
@@ -418,7 +420,7 @@ class SlowFast_GCNTransformer(nn.Module):
         x_fast_for_lat = x_fast.permute(0, 3, 1, 2).contiguous()
         
         # [Conv2D] (N, C_fast0, T_fast, J) -> (N, C_slow0, T_slow, J)
-        x_fused = self.lateral_connection(x_fast_for_lat)
+        x_fused = self.lateral_connection[0](x_fast_for_lat)
         
         # (N, C_slow0, T_slow, J) -> (N, T_slow, J, C_slow0)
         x_fused = x_fused.permute(0, 2, 3, 1).contiguous()
@@ -432,12 +434,26 @@ class SlowFast_GCNTransformer(nn.Module):
         x_slow = x_slow_flat_pe.view(N, T_slow, J, self.slow_dims[0])
 
         # --- 6. GCN-Transformer 블록 병렬 처리 ---
-        # (이 코드는 블록 수가 같다고 가정합니다)
         for i in range(len(self.fast_blocks)):
+            # >> 6a. 각 경로의 블록을 통과시킵니다.
             x_fast = self.fast_blocks[i](x_fast)
             x_slow = self.slow_blocks[i](x_slow)
             
-            # (참고: 더 복잡한 모델은 여기서 2차, 3차 융합을 수행합니다)
+            # >> 6b. 다음 블록으로 가기 전, (i+1)번째 융합을 수행합니다.
+            # (i=0일 때 fast_blocks[0] 통과 후, lateral_connections[1] 사용)
+            # (i=1일 때 fast_blocks[1] 통과 후, lateral_connections[2] 사용 ...)
+            if (i + 1) < len(self.lateral_connections):
+                # 융합을 위해 x_fast를 (N, C, T, J) 형태로 변환
+                x_fast_for_lat_i = x_fast.permute(0, 3, 1, 2).contiguous()
+                
+                # (i+1)번째 융합 레이어 통과
+                x_fused_i = self.lateral_connections[i+1](x_fast_for_lat_i)
+                
+                # (N, T, J, C) 형태로 복원
+                x_fused_i = x_fused_i.permute(0, 2, 3, 1).contiguous()
+                
+                # [핵심 융합] Slow 경로에 융합된 특징을 더합니다.
+                x_slow = x_slow + x_fused_i
 
         # --- 7. 최종 풀링 및 분류 ---
         summary_fast = self.fast_pool(x_fast) # (N, C_fast_final)
