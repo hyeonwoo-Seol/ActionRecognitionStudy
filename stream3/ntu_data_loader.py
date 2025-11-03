@@ -123,7 +123,7 @@ class NTURGBDDataset(Dataset):
             
             # >> 2-1. 임의 회전
             if np.random.rand() > config.PROB:
-                angle = np.random.uniform(-10, 10) * np.pi / 180.0
+                angle = np.random.uniform(-15, 15) * np.pi / 180.0
                 cos_angle, sin_angle = np.cos(angle), np.sin(angle)
                 
                 rotation_matrix = torch.tensor([
@@ -171,7 +171,7 @@ class NTURGBDDataset(Dataset):
                 
             # >> 2-3. 임의 스케일링
             if np.random.rand() > config.PROB:
-                scale_factor = np.random.uniform(0.9, 1.1)
+                scale_factor = np.random.uniform(0.8, 1.2)
                 
                 # >> 거리(채널 0)에 스케일링
                 features[..., DIST_CH] *= scale_factor
@@ -198,7 +198,7 @@ class NTURGBDDataset(Dataset):
             # >> 2-4. 관절 마스킹 (원본과 동일)
             if np.random.rand() > config.PROB:
                 num_joints = features.shape[1]
-                num_joints_to_mask = np.random.randint(1, 4) 
+                num_joints_to_mask = np.random.randint(2, 6) 
                 joint_indices_to_mask = np.random.choice(num_joints, num_joints_to_mask, replace=False)
                 features[:, joint_indices_to_mask, :] = 0.0
 
