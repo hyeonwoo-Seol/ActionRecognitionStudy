@@ -462,7 +462,7 @@ def main():
             
             print(f"Epoch {epoch+1} Summary | Train Acc: {train_acc_action:.4f} | Val Acc: {val_acc_action:.4f} | LR: {current_lr:.6f}")
             # >>피실험자 정확도 모니터링
-            print(f"          (Adversarial) | Train Sub_Acc: {train_acc_subject:.4f} | Val Sub_Acc: {val_acc_subject:.4f}")
+            print(f"(Adversarial) | Train Sub_Acc: {train_acc_subject:.4f} | Val Sub_Acc: {val_acc_subject:.4f}")
 
             
             
