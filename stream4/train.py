@@ -27,7 +27,6 @@ import numpy as np
 import sys
 import matplotlib.pyplot as plt
 import argparse
-import torch.nn.functional as F
 
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
@@ -35,38 +34,6 @@ from model import SlowFast_GCNTransformer
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
 # python train.py --scheduler cosine_restarts
-
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, alpha=None, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.gamma = gamma
-        self.alpha = alpha
-        self.reduction = reduction
-
-    def forward(self, inputs, targets):
-        # >> CrossEntropyLoss 계산 (log_softmax + nll_loss)
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none') 
-
-        # >> 확률(pt) 계산
-        pt = torch.exp(-ce_loss)
-
-        # >> Focal Loss 계산: (1-pt)^gamma * ce_loss
-        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
-
-        if self.alpha is not None:
-            # >> 클래스 불균형을 위한 alpha 가중치 적용 (옵션)
-            # >> 이 경우 alpha는 [C,] 형태의 텐서여야 함
-            alpha_t = self.alpha[targets]
-            focal_loss = alpha_t * focal_loss
-
-        # >> 최종 집계
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
-
 
 # ## ----------------------------------------------------
 # 커맨드 라인 인자에 따라 스케줄러를 반환한다.
@@ -176,23 +143,26 @@ def plot_history(history, save_path):
 # ## -----------------------------------------------------------------
 # epcoh 동안 모델의 학습을 수행한다.
 # ## -----------------------------------------------------------------
-def train_one_epoch(model, loader, criterion, optimizer, device, scaler):
+def train_one_epoch(model, loader, criterion_action, criterion_subject, optimizer, device, scaler):
     # >> 모델을 학습 모드로 설정한다.
     model.train()
 
     # >> 모든 Epoch들의 총 손실, 맞춘 예측 수, 전체 샘플 수를 기록할 변수들이다.
     running_loss = 0.0
-    correct_predictions = 0
+    correct_action = 0
+    correct_subject = 0
     total_samples = 0
     
 
     train_bar = tqdm(loader, desc="[Train]", colour="green")
     # >> 데이터 로더로부터 미니배치를 받아서 학습을 진행한다.
-    for data_fast, data_slow, labels in train_bar:
+    for data_fast, data_slow, action_labels, subject_labels in train_bar:
         # >> 두 개의 데이터 텐서를 device로 이동시킨다.
         data_fast = data_fast.to(device)
         data_slow = data_slow.to(device)
-        labels = labels.to(device)
+        action_labels = action_labels.to(device)
+        subject_labels = subject_labels.to(device)
+        
         
         
         # >> 이전 배치의 기울기를 초기화한다.
@@ -204,10 +174,16 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler):
         # >> 성능 향상 및 메모리 사용량 감소를 위함이다.
         with autocast(device_type=device):
             # >> 순전파를 수행하여 예측 결과를 얻는다.
-            outputs = model(data_fast, data_slow)
+            outputs_action, outputs_subject = model(data_fast, data_slow)
             # >> 손실을 계산한다.
-            loss = criterion(outputs, labels)
-        
+            loss_action = criterion_action(outputs_action, action_labels)
+            loss_subject = criterion_subject(outputs_subject, subject_labels)
+            
+            # GRL을 사용하므로, 두 손실을 config의 alpha 값으로 더함
+            # (GRL이 역전파 시 loss_subject의 부호를 자동으로 뒤집어 줌)
+            loss = loss_action + (config.ADVERSARIAL_ALPHA * loss_subject)
+
+            
         # ## ------------------------------------------------------------------------------
         # AMP로 float32 대신 float16으로 연산을 수행하면 역전파 과정에서 기울기값이
         # 0이 되는 현상이 발생할 수 있다. 이를 해결하기 위해 GradScaler를 사용한다.
@@ -228,16 +204,21 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler):
 
         # >> 배치 손실, 정확도, 샘플 수를 누적한다.
         running_loss += loss.item() * data_fast.size(0)
+        total_samples += action_labels.size(0)
         
-        _, predicted = torch.max(outputs.data, 1)
-        total_samples += labels.size(0)
-        correct_predictions += (predicted == labels).sum().item()
+        _, predicted_action = torch.max(outputs_action.data, 1)
+        correct_action += (predicted_action == action_labels).sum().item()
         
-        # >> 진행률 표시줄에 현재 손실과 정확도를 표시한다.
-        train_bar.set_postfix(loss=f"{running_loss/total_samples:.4f}", acc=f"{correct_predictions/total_samples:.4f}")
-
-    # >> 에폭의 평균 손실과 정확도를 반환한다.
-    return running_loss / total_samples, correct_predictions / total_samples
+        _, predicted_subject = torch.max(outputs_subject.data, 1)
+        correct_subject += (predicted_subject == subject_labels).sum().item()
+        
+        train_bar.set_postfix(
+            loss=f"{running_loss/total_samples:.4f}",
+            acc_ACT=f"{correct_action/total_samples:.4f}", # 행동 정확도
+            acc_SUB=f"{correct_subject/total_samples:.4f}"  # 피실험자 정확도
+        )
+        
+    return (running_loss / total_samples, correct_action / total_samples, correct_subject / total_samples)
 
 
 
@@ -245,13 +226,14 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler):
 # ## -----------------------------------------------------------------
 # epcoh 동안 모델의 검증을 수행한다.
 # ## -----------------------------------------------------------------
-def validate_one_epoch(model, loader, criterion, device):
+def validate_one_epoch(model, loader, criterion_action, criterion_subject, device):
     # >> 모델을 평가 모드로 설정한다.
     model.eval()
 
     # >> 모든 Epoch들의 총 손실, 맞춘 예측 수, 전체 샘플 수를 기록할 변수들이다.
     running_loss = 0.0
-    correct_predictions = 0
+    correct_action = 0
+    correct_subject = 0
     total_samples = 0
     
     val_bar = tqdm(loader, desc="[Val]", colour="cyan")
@@ -259,33 +241,45 @@ def validate_one_epoch(model, loader, criterion, device):
     # >> 기울기 계산을 비활성화하여 검증 속도를 높이고 메모리 사용량을 줄인다.
     with torch.no_grad():
         # >> 데이터 로더로부터 미니배치를 받아서 검증을 진행한다.
-        for data_fast, data_slow, labels in val_bar:
+        for data_fast, data_slow, action_labels, subject_labels in val_bar:
             # >> 두 개의 데이터 텐서를 device로 이동시킨다.
             data_fast = data_fast.to(device)
             data_slow = data_slow.to(device)
-            labels = labels.to(device)
-            
+            action_labels = action_labels.to(device)
+            subject_labels = subject_labels.to(device)
 
 
             # >> autocast를 사용하여 혼합 정밀도로 순전파를 수행한다.
             with autocast(device_type=device):
                 # >> 순전파를 수행하여 예측 결과를 얻는다.
-                outputs = model(data_fast, data_slow)
+                outputs_action, outputs_subject = model(data_fast, data_slow)
                 # >> 손실을 계산한다.
-                loss = criterion(outputs, labels)
+                loss_action = criterion_action(outputs_action, action_labels)
+                loss_subject = criterion_subject(outputs_subject, subject_labels)
+                
+                # [수정] GRL을 사용하므로, 두 손실을 더함
+                loss = loss_action + (config.ADVERSARIAL_ALPHA * loss_subject)
             
 
             # >> 배치 손실, 정확도, 샘플 수를 누적한다.
             running_loss += loss.item() * data_fast.size(0)
+            total_samples += action_labels.size(0)
             
-            _, predicted = torch.max(outputs.data, 1)
-            total_samples += labels.size(0)
-            correct_predictions += (predicted == labels).sum().item()
+            _, predicted_action = torch.max(outputs_action.data, 1)
+            correct_action += (predicted_action == action_labels).sum().item()
             
-            val_bar.set_postfix(loss=f"{running_loss/total_samples:.4f}", acc=f"{correct_predictions/total_samples:.4f}")
+            _, predicted_subject = torch.max(outputs_subject.data, 1)
+            correct_subject += (predicted_subject == subject_labels).sum().item()
+            
+            val_bar.set_postfix(
+                loss=f"{running_loss/total_samples:.4f}",
+                acc_ACT=f"{correct_action/total_samples:.4f}",
+                acc_SUB=f"{correct_subject/total_samples:.4f}"
+            )
     
-    # >> 에폭의 평균 손실과 정확도를 반환한다.
-    return running_loss / total_samples, correct_predictions / total_samples
+    return (running_loss / total_samples, 
+            correct_action / total_samples, 
+            correct_subject / total_samples)
 
 
 def main():
@@ -360,8 +354,11 @@ def main():
     ).to(device)
     
 
-    # >> 손실 함수로 FocalLoss를 사용한다.
-    criterion = FocalLoss(gamma=2.0)
+    # >> 손실 함수로 CrossEntropyLoss를 사용하며, 레이블 스무딩을 적용한다.
+    criterion_action = nn.CrossEntropyLoss(label_smoothing=config.LABEL_SMOOTHING)
+
+    # >> 피실험자 분류 손실 함수 (라벨 스무딩 없음)
+    criterion_subject = nn.CrossEntropyLoss()
 
     # >> 옵티마이저로 AdamW를 사용하여 가중치 감쇠를 적용한다.
     optimizer = optim.AdamW(
@@ -443,29 +440,35 @@ def main():
             print(f"\n--- Epoch {epoch+1}/{config.EPOCHS} ---")
             
             # >> 한 에폭 동안 모델을 학습시킨다.
-            train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, scaler)
+            train_loss, train_acc_action, train_acc_subject = train_one_epoch(
+            model, train_loader, criterion_action, criterion_subject, optimizer, device, scaler
+        )
             
             # >> 한 에폭 동안 모델을 검증한다.
-            val_loss, val_acc = validate_one_epoch(model, val_loader, criterion, device)
+            val_loss, val_acc_action, val_acc_subject = validate_one_epoch(
+            model, val_loader, criterion_action, criterion_subject, device
+        )
             
 
             # >> 현재 에폭의 학습 및 검증 결과를 history 딕셔너리에 추가한다.
             history['train_loss'].append(train_loss)
-            history['train_acc'].append(train_acc)
+            history['train_acc'].append(train_acc_action)
             history['val_loss'].append(val_loss)
-            history['val_acc'].append(val_acc)
+            history['val_acc'].append(val_acc_action)
             
             # >> 학습률 스케줄러를 다음 단계로 업데이트한다.
             current_lr = scheduler.get_last_lr()[0]
             scheduler.step()
             
-            print(f"Epoch {epoch+1} Summary | Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} | LR: {current_lr:.6f}")
+            print(f"Epoch {epoch+1} Summary | Train Acc: {train_acc_action:.4f} | Val Acc: {val_acc_action:.4f} | LR: {current_lr:.6f}")
+            # >>피실험자 정확도 모니터링
+            print(f"          (Adversarial) | Train Sub_Acc: {train_acc_subject:.4f} | Val Sub_Acc: {val_acc_subject:.4f}")
 
             
             
-            if val_acc > best_accuracy:
-                print(f"New best accuracy: {val_acc:.4f}! Saving model...")
-                best_accuracy = val_acc
+            if val_acc_action > best_accuracy:
+                print(f"New best accuracy: {val_acc_action:.4f}! Saving model...")
+                best_accuracy = val_acc_action
                 patience_counter = 0 # 최고 기록 경신 시 카운터 초기화
 
                 # >> 현재 모델의 상태를 체크포인트 파일로 저장한다.

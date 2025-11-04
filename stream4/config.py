@@ -24,7 +24,8 @@ NUM_JOINTS = 50   # 관절 수
 NUM_COORDS = 15   # 거리(1) + 방향(3) + 뼈길이(1) + 관절각도(1) + 몸통상대각도(2) + 비인접관절거리(2) + P0-P1중심거리(1) + P0-P1손발거리(4)
 NUM_CLASSES = 60  # 행동 클래스 수 (NTU RGB+D 60)
 PROB = 0.6 # -> 데이터 증강 확률. 60% 확률로 증강을 '안'한다.
-SPATIAL_KEEP_RATE = 0.5 # 공간적 어텐션에서 '중요 관절'로 유지할 비율
+SPATIAL_KEEP_RATE = 0.7 # 공간적 어텐션에서 '중요 관절'로 유지할 비율
+NUM_SUBJECTS = 40 # NTU-60 데이터셋의 총 피실험자 수
 
 # >> 학습 하이퍼파라미터
 EPOCHS = 100             # 총 학습 에폭
@@ -35,10 +36,11 @@ GRAD_CLIP_NORM = 1.0     # 그레이디언트 폭발을 막기 위한 클리핑 
 ADAMW_WEIGHT_DECAY = 0.05 # 이전값: 0.01 AdamW weight decay , L2 정규화의 강도 설정
 PATIENCE = 10 # 조기종료 변수
 LABEL_SMOOTHING = 0.05 # 이전값: 0.05 Loss Function CrossEntropy의 label smoothing
-DROPOUT = 0.4 # 이전값: 0.2 dropout
+DROPOUT = 0.3 # 이전값: 0.2 dropout
 ETA_MIN = 1e-6
 T_0 = 100 # n에폭마다 학습률이 최대치로 초기화된다. 현재는 사용하지 않기 위해 100으로 설정했다.
 T_MULT = 1 # 2로 설정된 경우, 15에폭 다음에 학습률 초기화는 2배인 30에폭이다. 현재는 사용하지 않는다.
+ADVERSARIAL_ALPHA = 0.1 # 적대적 학습의 강도
 
 # >> DIMS 사용법은, [입력 크기, 출력 크기]이다. 만약 4층을 쌓으려면 [64, 128, 128, 256, 256] 하면 된다.
 FAST_DIMS = [32, 32, 64]      # Fast: 가볍게

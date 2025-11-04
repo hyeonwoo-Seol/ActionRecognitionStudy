@@ -9,7 +9,32 @@ import torch.nn as nn
 import numpy as np
 import config
 import math
+from torch.autograd import Function
 
+# ## -----------------------------------------------------------------
+# Gradient Reversal Layer (GRL)
+# ## -----------------------------------------------------------------
+class GradientReversalFunction(Function):
+    @staticmethod
+    def forward(ctx, input, alpha):
+        # alpha 값을 저장하여 backward에서 사용
+        ctx.alpha = alpha 
+        return input.clone() # 입력 그대로 반환
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # 그래디언트의 부호를 뒤집고 alpha를 곱함
+        grad_input = -ctx.alpha * grad_output 
+        return grad_input, None # alpha 자체의 그래디언트는 없음
+
+class GradientReversalLayer(nn.Module):
+    def __init__(self, alpha):
+        super(GradientReversalLayer, self).__init__()
+        self.alpha = alpha
+
+    def forward(self, input):
+        # autograd Function을 적용
+        return GradientReversalFunction.apply(input, self.alpha)
 
 
 # ## ---------------------------------------------------------------
@@ -409,8 +434,9 @@ class SlowFast_GCNTransformer(nn.Module):
                  num_joints=config.NUM_JOINTS,
                  num_coords=config.NUM_COORDS,
                  num_classes=config.NUM_CLASSES,
-                 fast_dims=config.FAST_DIMS,  # 예: [32, 32, 64] (config.py에 추가 필요)
-                 slow_dims=config.SLOW_DIMS,  # 예: [128, 128, 256] (config.py에 추가 필요)
+                 fast_dims=config.FAST_DIMS,
+                 slow_dims=config.SLOW_DIMS,
+                 num_subjects=config.NUM_SUBJECTS
                  ):
         super().__init__()
         
@@ -489,16 +515,31 @@ class SlowFast_GCNTransformer(nn.Module):
         self.fast_pool = AttentionPooling(d_model=final_fast_dim)
         self.slow_pool = AttentionPooling(d_model=final_slow_dim)
 
-        # >> 두 경로의 요약 벡터를 결합 (비대칭적 헤드)
-        self.classification_head = nn.Sequential(
-            # 두 벡터를 합친 차원 (fast + slow)
-            nn.Linear(final_fast_dim + final_slow_dim, 256),
-            nn.GELU(),
-            RMSNorm(256)
+       # >> 각 헤드는 과적합 방지를 위해 config의 드롭아웃을 포함합니다
+        self.slow_head = nn.Sequential(
+            nn.Dropout(p=config.DROPOUT),
+            nn.Linear(final_slow_dim, num_classes)
         )
+        self.fast_head = nn.Sequential(
+            nn.Dropout(p=config.DROPOUT),
+            nn.Linear(final_fast_dim, num_classes)
+        )
+
         
-        self.dropout = nn.Dropout(p=config.DROPOUT)
-        self.fc = nn.Linear(256, num_classes)
+        
+        # >> 1. Gradient Reversal Layer (GRL) 인스턴스 생성
+        # >> alpha 값은 config에서 불러옴
+        self.grad_reversal = GradientReversalLayer(alpha=config.ADVERSARIAL_ALPHA) 
+        
+        # >> 2. 피실험자 분류기 (Head B) 정의 
+        combined_dim = final_fast_dim + final_slow_dim
+        self.subject_classifier = nn.Sequential(
+            nn.Linear(combined_dim, 256), # 두 스트림의 정보를 합쳐서 받음
+            nn.GELU(),
+            RMSNorm(256),
+            nn.Dropout(p=config.DROPOUT),
+            nn.Linear(256, num_subjects) # config의 NUM_SUBJECTS로 예측
+        )
 
     
     def forward(self, x_fast, x_slow):
@@ -557,11 +598,23 @@ class SlowFast_GCNTransformer(nn.Module):
         summary_fast = self.fast_pool(x_fast) # (N, C_fast_final)
         summary_slow = self.slow_pool(x_slow) # (N, C_slow_final)
 
-        # [최종 결합]
+        
+        # >> 각 전문가 헤드가 독립적으로 예측을 수행합니다.
+        output_slow = self.slow_head(summary_slow) # (N, num_classes)
+        output_fast = self.fast_head(summary_fast) # (N, num_classes)
+        output_action = output_slow + output_fast
+
+        # >> [Head B] 피실험자 예측
+        # 1. 두 요약 벡터를 cat
         combined_summary = torch.cat([summary_slow, summary_fast], dim=1)
         
-        final_vector = self.classification_head(combined_summary)
-        final_vector = self.dropout(final_vector)
-        output = self.fc(final_vector)
+        # 2. GRL에 통과
+        reversed_features = self.grad_reversal(combined_summary)
         
-        return output
+        # 3. Head B로 예측
+        output_subject = self.subject_classifier(reversed_features) # (N, num_subjects)
+        
+
+        # [수정] 2개의 예측 결과를 반환
+        return output_action, output_subject
+    

@@ -115,7 +115,13 @@ class NTURGBDDataset(Dataset):
         
         # >> 1. 원본(raw) 특징 로드. shape: (T, J, 9)
         features = saved_data['data'] 
-        label = saved_data['label']
+        action_label = saved_data['label']
+
+        # 파일명에서 피실험자 ID 추출
+        # 파일명 형식: S001C001P001R001A001.skeleton.pt
+        filename = os.path.basename(file_path)
+        subject_id = int(filename[9:12]) # 
+        subject_label = subject_id - 1   # (라벨은 0-indexed 이므로 1을 뺌)
         
 
         # >> 2. (훈련 시) 데이터 증강
@@ -226,4 +232,4 @@ class NTURGBDDataset(Dataset):
         data_slow = data_fast[:, ::2, :]
 
         # >> 4.3 Return
-        return data_fast, data_slow, label
+        return data_fast, data_slow, action_label, subject_label
