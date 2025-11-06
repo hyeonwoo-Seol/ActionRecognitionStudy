@@ -140,7 +140,7 @@ class NTURGBDDataset(Dataset):
                 ], dtype=torch.float32)
 
                 
-                # >> [수정됨] 13D 특징을 스칼라와 3D 벡터로 분리
+                # >> 13D 특징을 스칼라와 3D 벡터로 분리
                 # >> 스칼라 특징 (회전 안 함)
                 f_dist = features[..., DIST_CH]     # (T, J, 1)
                 f_len = features[..., BONE_LEN_CH]  # (T, J, 1)
@@ -184,24 +184,6 @@ class NTURGBDDataset(Dataset):
                 
                 # >> 거리(채널 0)에 스케일링
                 features[..., DIST_CH] *= scale_factor
-                
-                
-                
-                # >> 3D 가속도(채널 4,5,6)에 스케일링
-                # features[..., ACC_CH] *= scale_factor
-
-                # >> 뼈 길이(채널 4)에도 스케일링 적용
-                features[..., BONE_LEN_CH] *= scale_factor
-
-                # >> 비-인접 관절 거리에도 스케일링 적용
-                features[..., INTER_DIST_CH] *= scale_factor
-
-                # >> P0-P1 중심 거리에도 스케일링 적용
-                features[..., INTERACTION_CH] *= scale_factor
-
-                features[..., INTER_HAND_FOOT_CH] *= scale_factor
-
-                # >> 제외: 방향(단위벡터), 관절각도(각도), 상대각도(각도)
                 
                 
             # >> 2-4. 관절 마스킹 (원본과 동일)

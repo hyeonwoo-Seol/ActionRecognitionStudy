@@ -209,23 +209,6 @@ def _read_skeleton_file(filepath):
                             except (ValueError, IndexError):
                                 continue
                 
-                # ##---------------------------------------------------------------
-                # ## [핵심 수정 사항]
-                # ## 프레임(f_idx) 단위로 데이터 복사 로직을 수행합니다.
-                # ##---------------------------------------------------------------
-                
-                # 현재 프레임(f_idx)에 P0 또는 P1 데이터가 있는지 확인합니다.
-                # np.any()는 0이 아닌 값이 하나라도 있으면 True를 반환합니다.
-                person0_valid = np.any(final_coords[f_idx, 0, :, :]) 
-                person1_valid = np.any(final_coords[f_idx, 1, :, :])
-
-                # Case 1: P0(사람 0)만 있고 P1(사람 1)이 없음 -> P0을 P1로 복사
-                if person0_valid and not person1_valid:
-                    final_coords[f_idx, 1, :, :] = final_coords[f_idx, 0, :, :]
-                # Case 2: P1만 있고 P0이 없음 -> P1을 P0로 복사
-                elif not person0_valid and person1_valid:
-                    final_coords[f_idx, 0, :, :] = final_coords[f_idx, 1, :, :]
-                # Case 3: 둘 다 있거나 (2명), 둘 다 없으면 (빈 프레임) -> 아무것도 안 함 (0 유지)
 
                 f_idx += 1
     except IOError as e:
