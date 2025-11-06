@@ -1,6 +1,7 @@
 # preprocess_ntu_data.py
 # ##--------------------------------------------------------------------------
-# x, y, z skeleton 좌표를 이동 거리, 방향, 가속도로 미리 변환하는 파일이다.
+# x, y, z 스켈레톤 좌표를 15가지의 복합 특징(거리, 방향, 뼈 길이, 
+# 각종 각도 및 관절 간 거리 등)으로 미리 변환하는 파일이다.
 # 구현해야 할 기능
 # 1. 파일 읽어오기
 # 2. 좌표값을 내가 원하는 형태로 변환하기
@@ -37,8 +38,7 @@ MAX_BODIES = 5
 TRAINING_SUBJECTS = [1, 2, 4, 5, 8, 9, 13, 14, 15, 16, 17, 18, 19, 25, 27, 28, 31, 34, 35, 38]
 
 # ## ---------------------------------------------------------------------------------
-# >> 뼈 길이 계산을 위한 관절 연결 정보 (부모 -> 자식)
-# >> model.py의 get_ntu_shift_decompositions와 동일한 구조
+# 뼈 길이 계산을 위한 관절 연결 정보 (부모 -> 자식)
 # ## ---------------------------------------------------------------------------------
 SKELETON_BONES = [
     (20, 1), (1, 0), (20, 2), (2, 3),
@@ -49,7 +49,7 @@ SKELETON_BONES = [
 ] # 총 24개의 뼈
 
 # ## ---------------------------------------------------------------------------------
-# >> 관절 각도 계산을 위한 (조부모, 부모, 자식) 관절 트리플렛
+# 관절 각도 계산을 위한 (조부모, 부모, 자식) 관절 트리플렛
 # ## ---------------------------------------------------------------------------------
 JOINT_ANGLE_TRIPLETS = [
     (20, 4, 5), (4, 5, 6), (5, 6, 7),        # 오른팔
@@ -77,67 +77,77 @@ def _read_skeleton_file(filepath):
         print(f"Error: Could not read frame count from {filepath}")
         return np.zeros((0, 2, BASE_NUM_JOINTS, 3))
 
+    # >> 파일의 첫 줄에서 읽어온 프레임 수가 0인 경우,
+    # >> (0, 2, BASE_NUM_JOINTS, 3) 크기의 배열을 반환한다.
     if num_frames == 0:
         return np.zeros((0, 2, BASE_NUM_JOINTS, 3))
 
-    # --- 1. 첫 번째 스캔 (Pass 1): "실제 데이터가 있는" bodyID 2개 찾기 ---
-    # readlines() 대신 파일을 열어 한 줄씩 읽으며 ID만 카운트한다.
-    body_id_counts = {}
+    # >> 1. 첫 번째 스캔: 실제 데이터가 있는 bodyID 2개 찾기
+    # >> 파일 전체를 미리 스캔하여 두 명의 사람이 누구인지 미리 결정한다.
+    # >> NTU에서는 한 프레임에 2명 이상의 스켈레톤을 포함할 수 있기 때문이다.
+    # >> 이 때 투표 방식을 사용한다.
+    body_id_counts = {} # 투표함 준비
     try:
         with open(filepath, 'r') as f:
             f.readline()  # 첫 번째 프레임 수 라인 건너뛰기
 
             line_idx = 1
-            while True:
+            while True: # 파일 전체를 한 프레임씩, 한 사람씩 스캔하기.
                 line = f.readline()
                 if not line: break # 파일 끝
                 line_idx += 1
-                
+
+                # >> 파일을 읽다가 데이터가 손상된 프레임을 만나도 프로그램을 멈추지 말고 경고만 출력한다.
                 try:
+                    # >> 파일에서 읽어온 한 줄의 양쪽 공백이나 줄바꿈 문자를 제거한다.
                     num_bodies = int(line.strip())
-                except ValueError:
-                    # print(f"Warning: Invalid body count at line {line_idx} in {filepath}. Skipping frame.")
+                except ValueError: # 파일이 손상되면,,
+                    print(f"Warning: Invalid body count at line {line_idx} in {filepath}. Skipping frame.")
                     continue
 
+                # >> 사람 수 만큼 반복한다.
                 for i in range(num_bodies):
-                    line = f.readline() # body info line
+                    line = f.readline() # body info line을 읽는다.
                     if not line: break
                     line_idx += 1
                     
-                    body_info = line.strip().split()
-                    if len(body_info) < 1:
-                        # print(f"Warning: Skipping empty body info line {line_idx} in {filepath}")
+                    body_info = line.strip().split() # 읽어온 줄을 공백 기준으로 쪼개서 리스트로 만든다.
+                    if len(body_info) < 1: # 파일이 손상되면,,
+                        print(f"Warning: Skipping empty body info line {line_idx} in {filepath}")
                         continue
                     
-                    body_id = body_info[0]
+                    body_id = body_info[0] # 리스트의 첫 번째 요소가 사람의 고유 ID이므로 이를 가져온다.
 
-                    line = f.readline() # num joints line
+                    line = f.readline() # 관절 수가 적힌 다음줄을 읽는다.
                     if not line: break
                     line_idx += 1
-                    
+
+                    # >> 읽어온 관절 수를 정수로 변환한다.
                     try:
                         num_joints = int(line.strip())
                     except ValueError:
-                        # print(f"Warning: Invalid joint count at line {line_idx} in {filepath}.")
+                        print(f"Warning: Invalid joint count at line {line_idx} in {filepath}.")
                         num_joints = 0
                     
-                    # (*** 핵심 ***)
-                    # >> 이 body가 유효한지(좌표가 0이 아닌지) 확인
+                    
+                    # >> 이 body가 유효한지(좌표가 0이 아닌지) 확인한다.
                     has_non_zero_coord = False
                     for j in range(num_joints):
-                        line = f.readline() # joint info line
+                        line = f.readline()
                         if not line: break
                         line_idx += 1
                         
                         if not has_non_zero_coord:
                             try:
                                 joint_info = line.strip().split()
+                                # >> 과절의 x, y, z 좌표 중 하나라도 0이 아닌 값이 있는지 확인
+                                # >> 모든 관절의 모든 좌표가 0이면 가짜 데이터이다.
                                 if any(float(coord) != 0.0 for coord in joint_info[:3]):
                                     has_non_zero_coord = True
                             except (ValueError, IndexError):
                                 continue
                     
-                    # >> 유효한 데이터를 가진 body_id만 카운트
+                    # >> 유효한 데이터를 가진 body_id만 투표
                     if has_non_zero_coord:
                         body_id_counts[body_id] = body_id_counts.get(body_id, 0) + 1
     except IOError as e:
@@ -151,8 +161,7 @@ def _read_skeleton_file(filepath):
     body1_id = sorted_body_ids[0][0] if len(sorted_body_ids) > 0 else None
     body2_id = sorted_body_ids[1][0] if len(sorted_body_ids) > 1 else None
 
-    # --- 2. 두 번째 스캔 (Pass 2): ID를 기준으로 (T, 2, 25, 3) 배열 채우기 ---
-    
+    # >> 2. 두 번째 스캔: ID를 기준으로 (T, 2, 25, 3) 배열 채우기
     final_coords = np.zeros((num_frames, 2, BASE_NUM_JOINTS, 3))
     
     try:
@@ -276,9 +285,10 @@ def _calculate_angle_between_vectors(vec1, vec2):
 
 
 # ## ------------------------------------------------------------------------------
-# 좌표로부터 동적 특징(7D)과 정적 특징(2D)을 계산한다.
-# shape: (num_frames, 50, 9)
-# (50 = 25관절 * 2명, 9 = 거리(1) + 방향(3) + 가속도(3) + 뼈길이(1) + 관절각도(1))
+# 좌표로부터 동적 특징(4D)과 정적/상호작용 특징(11D)을 계산한다.
+# shape: (num_frames, 50, 15)
+# (50 = 25관절 * 2명, 15 = 거리(1) + 방향(3) + 뼈길이(1) + 관절각도(1) + 
+#  몸통상대각도(2) + 비인접관절거리(2) + P0-P1중심거리(1) + P0-P1손발거리(4))
 # ## ------------------------------------------------------------------------------
 def _calculate_features(coords):
     # >> coords shape: (T, 2, 25, 3)
@@ -309,7 +319,7 @@ def _calculate_features(coords):
     safe_torso_lengths = torso_lengths + 1e-8 
     safe_torso_lengths_squeezed = safe_torso_lengths.squeeze() # (T, 2)
 
-    # --- 1. 동적 특징 계산 (7D) ---
+    # --- 1. 동적 특징 계산 (4D) ---
     
     # >> 스켈레톤 중심화
     center_joint = coords[:, :, 0:1, :]
@@ -326,12 +336,8 @@ def _calculate_features(coords):
     magnitude_disp = np.linalg.norm(displacement, axis=-1, keepdims=True) + 1e-8
     direction = displacement / magnitude_disp
 
-    # >> 가속도 계산
-    # acceleration = np.zeros_like(displacement)
-    # acceleration[1:] = displacement[1:] - displacement[:-1]
 
-    # >> 동적 특징 결합 (T, 2, 25, 7)
-    # dynamic_features = np.concatenate((distance, direction, acceleration), axis=-1)
+    # >> 동적 특징 결합 (T, 2, 25, 4)
     dynamic_features = np.concatenate((distance, direction), axis=-1)
 
     # --- 2. 정적 특징 계산 (2D) ---
@@ -526,26 +532,17 @@ def _calculate_features(coords):
 
     # --- 최종 마스킹 ---
     # 유효하지 않은(몸통 길이 < 1cm) 프레임/사람의 모든 특징을 0으로 설정
-    # valid_mask shape은 (T, 2, 1, 1)이며, 브로드캐스팅을 통해 (T, 2, 25, 11)에 적용됩니다.
+    # valid_mask shape은 (T, 2, 1, 1)이며, 브로드캐스팅을 통해 (T, 2, 25, 15)에 적용됩니다.
     combined_features_per_person = combined_features_per_person * valid_mask
 
     
     person1_features = combined_features_per_person[:, 0, :, :]
     person2_features = combined_features_per_person[:, 1, :, :]
     
-    # >> (T, 50, 11) 형태로 반환
+    # >> (T, 50, 15) 형태로 반환
     final_features = np.concatenate((person1_features, person2_features), axis=1)
     
     return final_features
-
-
-
-
-
-
-
-
-
 
 
 
@@ -658,7 +655,7 @@ def process_and_save_file(filename):
     coords = _read_skeleton_file(skeleton_path)
     
     if coords.shape[0] == 0:
-        # >> 13차원 0벡터
+        # >> 15차원 0벡터
         processed_features = np.zeros((MAX_FRAMES, NUM_JOINTS, config.NUM_COORDS)) 
         first_frame_coords = np.zeros((NUM_JOINTS, 3))
     else: 
@@ -666,7 +663,7 @@ def process_and_save_file(filename):
         first_frame_coords = np.concatenate((first_frame_raw[0], first_frame_raw[1]), axis=0)
         
         downsampled_coords = coords[::2, :, :]
-        # >> 13차원 특징 계산
+        # >> 15차원 특징 계산
         raw_features = _calculate_features(downsampled_coords) 
         
         num_frames = raw_features.shape[0]
