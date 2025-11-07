@@ -12,15 +12,16 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import config
 
+# X-Sub (피실험자)
+TRAINING_SUBJECTS = [1, 2, 4, 5, 8, 9, 13, 14, 15, 16, 17, 18, 19, 25, 27, 28, 31, 34, 35, 38]
+# X-View (카메라)
+TRAINING_CAMERAS = [2, 3]
+VALIDATION_CAMERAS = [1]
 
 # ## ---------------------------------------------------------------------------------
 # >> 특징(feature) 벡터가 13개의 채널로 구성됩니다.
 # >> 기존 9D + 상대각도(2D) + 관절거리(2D)
 # ## ---------------------------------------------------------------------------------
-# DIST_CH, DIR_CH, ACC_CH = [0], list(range(1, 4)), list(range(4, 7))
-# BONE_LEN_CH, JOINT_ANG_CH = [7], [8]
-# REL_ANG_CH = [9, 10]
-# INTER_DIST_CH = [11, 12]
 DIST_CH, DIR_CH = [0], list(range(1, 4))
 BONE_LEN_CH, JOINT_ANG_CH = [4], [5]
 REL_ANG_CH = [6, 7]
@@ -35,15 +36,14 @@ INTER_HAND_FOOT_CH = [11, 12, 13, 14]
 # 읽어와 처리하는 방식으로 동작하여 메모리를 효율적으로 사용한다..
 # ## ----------------------------------------------------------------------------------
 class NTURGBDDataset(Dataset):
-    def __init__(self, data_path, split='train', max_frames=300):
+    def __init__(self, data_path, split='train', max_frames=300, protocol='xsub'):
         self.data_path = data_path # 전처리된 .pt 파일들이 저장되는 디렉토리 경로
         self.split = split         # 'train' 또는 'val' 모드를 설정
         self.max_frames = max_frames # 최대 프레임 수
+        self.protocol = protocol
 
 
-        # >> 훈련 데이터셋을 구성하는 subject의 ID 목록
-        # >> 이 목록을 사용해서 train set 과 val set을 분리한다.
-        self.training_subjects = [1, 2, 4, 5, 8, 9, 13, 14, 15, 16, 17, 18, 19, 25, 27, 28, 31, 34, 35, 38]
+        self.training_subjects = TRAINING_SUBJECTS
 
 
         self.samples = [] # 불러올 데이터 파일들의 전체 경로를 저장할 리스트
@@ -81,26 +81,28 @@ class NTURGBDDataset(Dataset):
             # >> .pt 확장자를 가진 파일만 처리한다.
             if not filename.endswith('.pt'):
                 continue
-
-            
-            # >> 파일명에서 피실험자 ID를 정수형으로 추출한다.
-            subject_id = int(filename[9:12])
-
-            
-            # >> 추출한 ID가 훈련용 ID 목록에 포함되어 있는지 확인한다.
-            is_training_subject = subject_id in self.training_subjects
-
-            
+                        
             # >> join 으로 운영체제에 맞게 자동으로 파일 경로를 합친다.
             file_path = os.path.join(self.data_path, filename)
 
-            
-            # >> 현재 모드에 따라 파일 경로를 self.samples 리스트에 추가한다.
-            if self.split == 'train' and is_training_subject: # train 모드 
-                self.samples.append(file_path)
-            elif self.split == 'val' and not is_training_subject: # val 모드
-                self.samples.append(file_path)
-                
+            # 1. X-Sub 프로토콜
+            if self.protocol == 'xsub':
+                subject_id = int(filename[9:12]) # S001P001... -> P
+                is_training_subject = subject_id in self.training_subjects
+
+                if self.split == 'train' and is_training_subject:
+                    self.samples.append(file_path)
+                elif self.split == 'val' and not is_training_subject:
+                    self.samples.append(file_path)
+
+            # 2. X-View 프로토콜
+            elif self.protocol == 'xview':
+                camera_id = int(filename[5:8]) # S001C002... -> C
+                if self.split == 'train' and camera_id in TRAINING_CAMERAS:
+                    self.samples.append(file_path)
+                elif self.split == 'val' and camera_id in VALIDATION_CAMERAS:
+                    self.samples.append(file_path)
+                            
 
     # >> 데이터셋의 총 샘플 수를 반환한다.
     def __len__(self):
@@ -118,14 +120,24 @@ class NTURGBDDataset(Dataset):
         action_label = saved_data['label']
 
         filename = os.path.basename(file_path)
-        subject_id = int(filename[9:12]) # 1~40 사이의 값
 
-        # self.training_subjects 리스트 (1, 2, 4, ...)에 subject_id가 포함되어 있는지 확인
-        if subject_id in self.training_subjects:
-            subject_label = 0 # '그룹 A' (훈련용 도메인)
-        else:
-            subject_label = 1 # '그룹 B' (검증용 도메인)
+        if self.protocol == 'xsub':
+            subject_id = int(filename[9:12])
+            if subject_id in self.training_subjects:
+                subject_label = 0 # '그룹 A' (훈련용 도메인)
+            else:
+                subject_label = 1 # '그룹 B' (검증용 도메인)
         
+        elif self.protocol == 'xview':
+            camera_id = int(filename[5:8])
+            if camera_id in TRAINING_CAMERAS:
+                subject_label = 0 # '그룹 A' (훈련용 도메인)
+            else:
+                subject_label = 1 # '그룹 B' (검증용 도메인)
+        else:
+            subject_label = 0 # 기본값 (오류 방지)
+
+                
 
         # >> 2. (훈련 시) 데이터 증강
         if self.split == 'train':

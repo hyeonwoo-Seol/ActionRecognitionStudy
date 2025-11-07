@@ -176,12 +176,25 @@ def train_one_epoch(model, loader, criterion_action, criterion_subject, optimize
         with autocast(device_type=device):
             # >> 순전파를 수행하여 예측 결과를 얻는다.
             outputs_action, outputs_subject = model(data_fast, data_slow)
-            # >> 손실을 계산한다.
-            loss_action = criterion_action(outputs_action, action_labels)
+
+            # --- [수정됨] 정보 누수 방지 로직 ---
+
+            # 1. Action 손실을 샘플별로 계산 (reduction='none'이므로) (N,)
+            loss_action_all = criterion_action(outputs_action, action_labels)
+            
+            # 2. Subject 손실은 배치 전체에 대해 계산 (reduction='mean')
             loss_subject = criterion_subject(outputs_subject, subject_labels)
             
+            # 3. Source 데이터(subject_label == 0)에만 Action 손실을 적용
+            source_mask = (subject_labels == 0).float()
+
+            # 4. 마스크가 적용된 Action 손실의 평균을 계산
+            # (마스크된 샘플 수로만 나누어 평균을 구함)
+            loss_action = (loss_action_all * source_mask).sum() / (source_mask.sum() + 1e-8)
+
+            # --- [수정됨] End ---
+            
             # GRL을 사용하므로, 두 손실을 config의 alpha 값으로 더함
-            # (GRL이 역전파 시 loss_subject의 부호를 자동으로 뒤집어 줌)
             loss = loss_action + (config.ADVERSARIAL_ALPHA * loss_subject)
 
             
@@ -293,6 +306,10 @@ def main():
         choices=['cosine_decay', 'cosine_restarts'],
         help="Scheduler to use: 'cosine_decay' or 'cosine_restarts'"
     )
+    parser.add_argument(
+        '-p', '--protocol', type=str, default='xsub', choices=['xsub', 'xview'],
+        help="Training protocol: 'xsub' (Cross-Subject) or 'xview' (Cross-View). Default: 'xsub'"
+    )
     args = parser.parse_args()
 
 
@@ -314,25 +331,27 @@ def main():
     print(f"Dataset path: {config.DATASET_PATH}")
     
 
-    # >> 1. [수정됨] 학습용 데이터셋을 두 도메인(Source/Target)으로 각각 불러옵니다.
+    # >> 1. 학습용 데이터셋을 두 도메인(Source/Target)으로 각각 불러옵니다.
     print("Loading source domain (train subjects, label 0)...")
     train_dataset_source = NTURGBDDataset(
         data_path = config.DATASET_PATH,
         split = 'train', # subject_label 0 (훈련 그룹)
-        max_frames = config.MAX_FRAMES
+        max_frames = config.MAX_FRAMES,
+        protocol = args.protocol
     )
     
     print("Loading target domain (val subjects, label 1) for adversarial training...")
     train_dataset_target = NTURGBDDataset(
         data_path = config.DATASET_PATH,
         split = 'val',   # subject_label 1 (검증 그룹)
-        max_frames = config.MAX_FRAMES
+        max_frames = config.MAX_FRAMES,
+        protocol = args.protocol
     )
 
     combined_train_dataset = ConcatDataset([train_dataset_source, train_dataset_target])
 
     train_loader = DataLoader(
-        combined_train_dataset, # <--- 여기가 train_dataset에서 combined_train_dataset으로 변경됨
+        combined_train_dataset,
         batch_size = config.BATCH_SIZE,
         shuffle = True,
         num_workers = config.NUM_WORKERS,
@@ -344,7 +363,8 @@ def main():
     val_dataset = NTURGBDDataset(
         data_path = config.DATASET_PATH,
         split = 'val',
-        max_frames = config.MAX_FRAMES
+        max_frames = config.MAX_FRAMES,
+        protocol = args.protocol
     )
 
     # >> 검증용 데이터 로더를 설정한다.
@@ -366,7 +386,10 @@ def main():
     
 
     # >> 손실 함수로 CrossEntropyLoss를 사용하며, 레이블 스무딩을 적용한다.
-    criterion_action = nn.CrossEntropyLoss(label_smoothing=config.LABEL_SMOOTHING)
+    criterion_action = nn.CrossEntropyLoss(
+        label_smoothing=config.LABEL_SMOOTHING,
+        reduction='none'
+    )
 
     # >> 피실험자 분류 손실 함수 (라벨 스무딩 없음)
     criterion_subject = nn.CrossEntropyLoss()

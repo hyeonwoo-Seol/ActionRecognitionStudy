@@ -168,20 +168,12 @@ def evaluate_model(checkpoint_path, protocol, run_tsne):
     
     # --- X-View 경고 및 설정 ---
     if protocol == 'xview':
-        split_name = 'xview'
         print("--- [X-View] Evaluation Mode ---")
-        print("\n" + "="*50)
-        print("!! 경고 !!: 'xview' 프로토콜을 선택했습니다.")
-        print("이는 `ntu_data_loader.py` 파일이 `split='xview'`를")
-        print("인식하고, 파일명의 카메라 ID(Cxxx)를 기준으로")
-        print("데이터를 분리하도록 수정되었음을 전제로 합니다.")
-        print("만약 수정되지 않았다면, 이 코드는 오류를 발생시킵니다.")
-        print("="*50 + "\n")
     else: # 'xsub'
-        split_name = 'val' # 기존 로더는 'val'을 X-Sub 검증용으로 사용
         print("--- [X-Sub] Evaluation Mode ---")
 
-
+    split_name = 'val'
+    
     # >> 설정값 불러오기
     device = config.DEVICE
     print(f"Using device: {device}")
@@ -190,8 +182,9 @@ def evaluate_model(checkpoint_path, protocol, run_tsne):
     try:
         val_dataset = NTURGBDDataset(
             data_path=config.DATASET_PATH, 
-            split=split_name, # [수정됨] protocol에 따라 'val' 또는 'xview' 사용
-            max_frames=config.MAX_FRAMES
+            split=split_name,
+            max_frames=config.MAX_FRAMES,
+            protocol = protocol
         )
     except FileNotFoundError:
         print(f"오류: `split='{split_name}'`에 해당하는 데이터를 찾을 수 없습니다.")
