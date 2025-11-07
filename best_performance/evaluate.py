@@ -13,7 +13,9 @@ import torch.nn as nn
 from tqdm import tqdm
 import argparse
 from torch.amp import autocast
-from fvcore.analyze import FlopCountAnalysis, flop_count_str
+import numpy as np
+
+from thop import profile, clever_format
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
@@ -114,29 +116,35 @@ def generate_tsne_plot(features_list, action_labels_list, domain_labels_list, pr
     print(f"t-SNE visualization saved to '{save_path}'")
     plt.close()
 
-## #--------------------------------------------------------------------
-# 모델의 GFLOPs (Giga Floating Point Operations)를 계산한다.
-## #--------------------------------------------------------------------
 def calculate_flops(model, device):
-    if not FVCORE_AVAILABLE:
-        return
 
-    print("\n--- Calculating FLOPs ---")
+    print("\n--- Calculating FLOPs (using thop) ---")
     model.eval() 
     T_fast = config.MAX_FRAMES
     T_slow = config.MAX_FRAMES // 2 
     
+    # 더미 입력 생성
     sample_fast = torch.randn(1, config.NUM_COORDS, T_fast, config.NUM_JOINTS).to(device)
     sample_slow = torch.randn(1, config.NUM_COORDS, T_slow, config.NUM_JOINTS).to(device)
+    
+    # thop.profile은 입력을 리스트 또는 튜플로 받습니다.
     inputs = (sample_fast, sample_slow) 
     
     try:
-        flops = FlopCountAnalysis(model, inputs)
-        gflops = flops.total() / 1e9
-        print(f"Model GFLOPs: {gflops:.2f} G")
+        # thop.profile은 (total_ops, total_params)를 반환합니다.
+        total_ops, total_params = profile(model, inputs=inputs, verbose=False)
+        
+        # thop는 MACs(Multiply-Accumulate)를 계산합니다.
+        # GFLOPs는 G-MACs * 2 로 계산하는 것이 표준입니다.
+        gflops = (total_ops * 2) / 1e9
+        
+        print(f"Model GFLOPs (MACs * 2): {gflops:.2f} G")
+        print(f"(thop이 계산한 G-MACs: {total_ops / 1e9:.2f} G)")
+
     except Exception as e:
-        print(f"Error during FLOPs calculation: {e}")
-        print("FLOPs calculation failed.")
+        print(f"Error during FLOPs calculation with thop: {e}")
+        print("이것은 'thop'가 사용자님의 모델에 있는 커스텀 모듈(예: ShiftGraphConvolution)을")
+        print("인식하지 못할 때 발생할 수 있습니다. 이 경우 FLOPs 계산은 실패합니다.")
     print("---------------------------\n") # 파라미터 계산 후 출력으로 이동
 
 ## #--------------------------------------------------------------------
@@ -209,11 +217,13 @@ def evaluate_model(checkpoint_path, protocol, run_tsne):
     ).to(device)
 
     # FLOPs 및 Params 계산
-    calculate_flops(model, device)
     calculate_params(model)
-
+    
     # 체크포인트 로드
     load_checkpoint(checkpoint_path, model, device=device)
+
+    calculate_flops(model, device)
+    
     criterion = nn.CrossEntropyLoss()
 
     # --- t-SNE를 위한 Hook 준비 ---
