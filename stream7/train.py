@@ -28,13 +28,20 @@ import sys
 import matplotlib.pyplot as plt
 import argparse
 from torch.utils.data import ConcatDataset
+import time
+import optuna
 
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
 from model import SlowFast_GCNTransformer
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
-# python train.py --scheduler cosine_restarts
+# >> --study-name " "은 모든 실험 기록을 저장할 데이터베이스 파일(.db) 이름이다.
+# python train.py --protocol xsub --scheduler cosine_decay --study-name "slowfast_tuning_v1" --n-trials 50
+# >> 실시간 모니터링을 하려면 새 터미널에서 optuna-dashboard sqlite:///slowfast_tuning_v1.db 를 입력하라.
+
+# python train.py --scheduler cosine_decay or cosine_restarts
+# python train.py --protocol xsub or xview
 
 # ## ----------------------------------------------------
 # 커맨드 라인 인자에 따라 스케줄러를 반환한다.
@@ -43,6 +50,17 @@ from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 # python train.py --scheduler cosine_decay
 # python train.py --scheduler cosine_restarts
 # ## ----------------------------------------------------
+
+
+
+# Optuna가 한 번의 Trial(시도)마다 학습할 최대 에폭 수
+# (값을 줄여서 더 많은 하이퍼파라미터를 빠르게 탐색하는 것이 유리합니다)
+MAX_EPOCHS_PER_TRIAL = 30 
+# Optuna가 총 시도할 횟수
+N_TRIALS = 50 
+# Optuna가 가지치기(Pruning)를 시작하기 전, 최소한으로 학습을 보장할 에폭 수
+PRUNING_WARMUP_EPOCHS = 10
+
 def get_scheduler(optimizer, scheduler_name, total_epochs, warmup_epochs):
     print(f"Using '{scheduler_name}' scheduler.")
 
@@ -153,9 +171,10 @@ def train_one_epoch(model, loader, criterion_action, criterion_subject, optimize
     correct_action = 0
     correct_subject = 0
     total_samples = 0
+
     
 
-    train_bar = tqdm(loader, desc="[Train]", colour="green")
+    train_bar = tqdm(loader, desc="[Train]", colour="green", leave=False)
     # >> 데이터 로더로부터 미니배치를 받아서 학습을 진행한다.
     for data_fast, data_slow, action_labels, subject_labels in train_bar:
         # >> 두 개의 데이터 텐서를 device로 이동시킨다.
@@ -192,7 +211,6 @@ def train_one_epoch(model, loader, criterion_action, criterion_subject, optimize
             # (마스크된 샘플 수로만 나누어 평균을 구함)
             loss_action = (loss_action_all * source_mask).sum() / (source_mask.sum() + 1e-8)
 
-            # --- [수정됨] End ---
             
             # GRL을 사용하므로, 두 손실을 config의 alpha 값으로 더함
             loss = loss_action + (config.ADVERSARIAL_ALPHA * loss_subject)
@@ -250,7 +268,7 @@ def validate_one_epoch(model, loader, criterion_action, criterion_subject, devic
     correct_subject = 0
     total_samples = 0
     
-    val_bar = tqdm(loader, desc="[Val]", colour="cyan")
+    val_bar = tqdm(loader, desc="[Val]", colour="cyan", leave=False)
 
     # >> 기울기 계산을 비활성화하여 검증 속도를 높이고 메모리 사용량을 줄인다.
     with torch.no_grad():
@@ -299,6 +317,179 @@ def validate_one_epoch(model, loader, criterion_action, criterion_subject, devic
             correct_action / total_samples, 
             correct_subject / total_samples)
 
+# --- [OPTUNA] ---
+# 기존 main() 함수의 내용을 Optuna가 호출할 'objective' 함수(run_trial)로 변경합니다.
+# --- [OPTUNA] ---
+def run_trial(trial, args):
+    """Optuna가 단일 trial을 실행하기 위해 호출하는 함수"""
+    
+    # >> 재현성을 위해 시드를 고정한다. (Optuna는 trial마다 다른 시드를 권장할 수 있으나,
+    #    하이퍼파라미터의 순수 효과를 보려면 시드 고정이 유리할 수 있습니다.)
+    set_seed(config.SEED)
+
+    # --- [OPTUNA] 1. 하이퍼파라미터 제안 ---
+    # Optuna의 trial 객체를 사용하여 config.py의 값들을 '임시로' 덮어씁니다.
+    config.LEARNING_RATE = trial.suggest_float("LEARNING_RATE", 1e-4, 5e-4, log=True)
+    config.DROPOUT = trial.suggest_float("DROPOUT", 0.2, 0.5)
+    config.ADVERSARIAL_ALPHA = trial.suggest_float("ADVERSARIAL_ALPHA", 0.05, 0.3)
+    config.PROB = trial.suggest_float("PROB", 0.3, 0.7) # (증강 안 할 확률: 30% ~ 70%)
+    config.ADAMW_WEIGHT_DECAY = trial.suggest_float("ADAMW_WEIGHT_DECAY", 0.01, 0.1, log=True)
+    config.LABEL_SMOOTHING = trial.suggest_float("LABEL_SMOOTHING", 0.0, 0.15)
+    
+    # (config.py에 있지만 이번 튜닝에서 제외할 파라미터는 기존 값을 사용합니다)
+    
+    print(f"\n--- [Trial {trial.number}] ---")
+    print(f"Params: LR={config.LEARNING_RATE:.6f}, Dropout={config.DROPOUT:.3f}, Alpha={config.ADVERSARIAL_ALPHA:.3f}")
+    print(f"        Prob={config.PROB:.3f}, WeightDecay={config.ADAMW_WEIGHT_DECAY:.4f}, Smoothing={config.LABEL_SMOOTHING:.3f}")
+
+    # --- [OPTUNA] 2. 학습 준비 (기존 main() 코드) ---
+    device = config.DEVICE
+
+    # (데이터 로더는 Optuna trial마다 새로 생성해야 합니다.
+    #  특히 ntu_data_loader.py가 config.PROB 값을 참조하기 때문입니다)
+    train_dataset_source = NTURGBDDataset(
+        data_path = config.DATASET_PATH, split = 'train',
+        max_frames = config.MAX_FRAMES, protocol = args.protocol
+    )
+    train_dataset_target = NTURGBDDataset(
+        data_path = config.DATASET_PATH, split = 'val',
+        max_frames = config.MAX_FRAMES, protocol = args.protocol
+    )
+    combined_train_dataset = ConcatDataset([train_dataset_source, train_dataset_target])
+    train_loader = DataLoader(
+        combined_train_dataset, batch_size = config.BATCH_SIZE, shuffle = True,
+        num_workers = config.NUM_WORKERS, pin_memory = config.PIN_MEMORY
+    )
+    val_dataset = NTURGBDDataset(
+        data_path = config.DATASET_PATH, split = 'val',
+        max_frames = config.MAX_FRAMES, protocol = args.protocol
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size = config.BATCH_SIZE, shuffle = False,
+        num_workers = config.NUM_WORKERS, pin_memory = config.PIN_MEMORY
+    )
+
+    # (덮어쓴 config 값으로 모델 생성)
+    model = SlowFast_GCNTransformer(
+        num_joints=config.NUM_JOINTS,
+        num_coords=config.NUM_COORDS,
+        num_classes=config.NUM_CLASSES,
+        fast_dims=config.FAST_DIMS,
+        slow_dims=config.SLOW_DIMS
+    ).to(device)
+
+    # (덮어쓴 config 값으로 손실 함수, 옵티마이저 생성)
+    criterion_action = nn.CrossEntropyLoss(
+        label_smoothing=config.LABEL_SMOOTHING, reduction='none'
+    )
+    criterion_subject = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr = config.LEARNING_RATE,
+        weight_decay = config.ADAMW_WEIGHT_DECAY
+    )
+    scaler = GradScaler()
+    scheduler = get_scheduler(
+        optimizer,
+        scheduler_name=args.scheduler,
+        total_epochs=MAX_EPOCHS_PER_TRIAL, # --- [OPTUNA] ---
+        warmup_epochs=config.WARMUP_EPOCHS
+    )
+
+    best_accuracy = 0.0
+    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
+
+    # --- [OPTUNA] --- 각 trial마다 고유한 체크포인트 폴더 생성
+    trial_save_dir = os.path.join(config.SAVE_DIR, f"trial_{trial.number}")
+    os.makedirs(trial_save_dir, exist_ok=True)
+    
+    # --- [OPTUNA] --- Trial은 항상 0 에폭부터 새로 시작 (체크포인트 로드 로직 제거)
+    
+    LR_DROP_PATIENCE = 4
+    MAX_LR_DROPS = 2
+    patience_counter = 0
+    lr_drop_count = 0
+
+    try:
+        # --- [OPTUNA] --- config.EPOCHS 대신 MAX_EPOCHS_PER_TRIAL 사용
+        for epoch in range(MAX_EPOCHS_PER_TRIAL):
+            epoch_start_time = time.time()
+            print(f"\n--- [Trial {trial.number}] Epoch {epoch+1}/{MAX_EPOCHS_PER_TRIAL} ---")
+            
+            train_loss, train_acc_action, train_acc_subject = train_one_epoch(
+                model, train_loader, criterion_action, criterion_subject, optimizer, device, scaler
+            )
+            
+            val_loss, val_acc_action, val_acc_subject = validate_one_epoch(
+                model, val_loader, criterion_action, criterion_subject, device
+            )
+
+            history['train_loss'].append(train_loss)
+            history['train_acc'].append(train_acc_action)
+            history['val_loss'].append(val_loss)
+            history['val_acc'].append(val_acc_action)
+            
+            current_lr = scheduler.get_last_lr()[0]
+            scheduler.step()
+            
+            epoch_time = time.time() - epoch_start_time
+            print(f"Epoch {epoch+1} Summary | Train Acc: {train_acc_action:.4f} | Val Acc: {val_acc_action:.4f} | LR: {current_lr:.6f} | Time: {epoch_time:.1f}s")
+            print(f"(Adversarial) | Train Sub_Acc: {train_acc_subject:.4f} | Val Sub_Acc: {val_acc_subject:.4f}")
+
+            if val_acc_action > best_accuracy:
+                best_accuracy = val_acc_action
+                patience_counter = 0 
+                print(f"New best accuracy for Trial {trial.number}: {val_acc_action:.4f}! Saving model...")
+
+                # --- [OPTUNA] --- 고유한 경로에 저장
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
+                    'best_acc': best_accuracy,
+                    'scaler': scaler.state_dict(),
+                    'history': history,
+                    'patience_counter': patience_counter,
+                    'lr_drop_count': lr_drop_count,
+                    'optuna_params': trial.params # --- [OPTUNA] --- 이 모델을 만든 파라미터 저장
+                }, directory=trial_save_dir, filename="best_model.pth.tar")
+
+            else: 
+                patience_counter += 1
+                print(f"No improvement. Patience: {patience_counter}/{LR_DROP_PATIENCE}. LR Drops: {lr_drop_count}/{MAX_LR_DROPS}.")
+                
+                if patience_counter >= config.PATIENCE: 
+                    print(f"Early stopping triggered for Trial {trial.number} (Patience: {config.PATIENCE}).")
+                    break # 이 Trial의 학습 루프 조기 종료
+                
+
+            
+            # --- [OPTUNA] 3. Pruning (가지치기) ---
+            # Optuna에 현재 epoch의 Val Acc를 보고합니다.
+            trial.report(val_acc_action, epoch)
+
+            # Optuna가 이 trial을 중단해야 한다고 결정했는지 확인합니다.
+            if epoch > PRUNING_WARMUP_EPOCHS and trial.should_prune():
+                print(f"--- [Trial {trial.number}] Pruned at epoch {epoch+1} (Val Acc: {val_acc_action:.4f}) ---")
+                # 가지치기 예외를 발생시켜 이 trial을 즉시 중단합니다.
+                raise optuna.TrialPruned()
+
+    except KeyboardInterrupt:
+        # --- [OPTUNA] --- 사용자가 Ctrl+C를 눌러도 이 trial만 중단되고,
+        # Optuna의 메인 프로세스(study.optimize)는 계속 다음 trial을 시도할 수 있습니다.
+        # (전체 연구를 중단하려면 메인 프로세스에서 Ctrl+C를 눌러야 함)
+        print(f"\nUser interrupted Trial {trial.number}.")
+        # 이 trial은 실패한 것으로 간주하고 최저값을 반환할 수 있습니다.
+        return 0.0 # 또는 best_accuracy
+    
+    # --- [OPTUNA] ---
+    # 그래프를 trial마다 저장합니다.
+    plot_history(history, os.path.join(trial_save_dir, "training_history.png"))
+    
+    # 이 trial의 최종 '최고 정확도'를 반환합니다.
+    # Optuna는 이 값을 최대화하는 방향으로 다음 파라미터를 탐색합니다.
+    return best_accuracy
 
 def main():
     # >> argparse를 사용하여 커맨드 라인 인자를 설정한다.
@@ -314,276 +505,80 @@ def main():
         '-p', '--protocol', type=str, default='xsub', choices=['xsub', 'xview'],
         help="Training protocol: 'xsub' (Cross-Subject) or 'xview' (Cross-View). Default: 'xsub'"
     )
+    # --- [OPTUNA] --- 연구 이름을 받아 이어서 할 수 있도록 추가
+    parser.add_argument('--study-name', type=str, default="slowfast_gcn_tuning",
+                        help="Name for the Optuna study.")
+    parser.add_argument('--n-trials', type=int, default=N_TRIALS,
+                        help="Total number of trials to run.")
+    
     args = parser.parse_args()
 
+    print(f"--- Starting Optuna Study ---")
+    print(f"Study Name: {args.study_name}")
+    print(f"Protocol: {args.protocol}")
+    print(f"Total Trials: {args.n_trials}")
+    print(f"Epochs per Trial: {MAX_EPOCHS_PER_TRIAL}")
+    print(f"-----------------------------")
 
-    # >> 재현성을 위해 시드를 고정한다.
-    set_seed(config.SEED)
-    print(f"Seed fixed to {config.SEED}")
-
-    LR_DROP_PATIENCE = 4 # 2번 연속 성능 향상이 없으면 LR 감소
-    MAX_LR_DROPS = 2     # LR 감소 최대 횟수
-
-    # >> 학습에 사용할 장치(CPU 또는 GPU)를 설정한다.
-    device = config.DEVICE
-    print(f"Using device: {device}")
-    print(f"Dataset path: {config.DATASET_PATH}")
-    
-    
-    # >> 설정값 불러오기
-    print(f"Using device: {config.DEVICE}")
-    print(f"Dataset path: {config.DATASET_PATH}")
-    
-
-    # >> 1. 학습용 데이터셋을 두 도메인(Source/Target)으로 각각 불러옵니다.
-    print("Loading source domain (train subjects, label 0)...")
-    train_dataset_source = NTURGBDDataset(
-        data_path = config.DATASET_PATH,
-        split = 'train', # subject_label 0 (훈련 그룹)
-        max_frames = config.MAX_FRAMES,
-        protocol = args.protocol
+    # --- [OPTUNA] 1. Study 생성 ---
+    # Pruner: 중간 결과가 나쁜 trial을 조기 중단 (가지치기)
+    # MedianPruner: 다른 trial들의 '중간값'보다 성능이 나쁘면 중단
+    pruner = optuna.pruners.MedianPruner(
+        n_startup_trials=5, # 처음 5개 trial은 가지치기 안 함
+        n_warmup_steps=PRUNING_WARMUP_EPOCHS, # 10 에폭 전까지는 가지치기 안 함
+        interval_steps=1 # 1 에폭마다 가지치기 여부 확인
     )
     
-    print("Loading target domain (val subjects, label 1) for adversarial training...")
-    train_dataset_target = NTURGBDDataset(
-        data_path = config.DATASET_PATH,
-        split = 'val',   # subject_label 1 (검증 그룹)
-        max_frames = config.MAX_FRAMES,
-        protocol = args.protocol
+    # Storage: 모든 실험 결과를 SQLite 데이터베이스에 저장
+    # (스크립트가 중단되어도 'optuna_study.db' 파일에 기록이 남아 이어서 할 수 있음)
+    storage_name = f"sqlite:///{args.study_name}.db"
+
+    study = optuna.create_study(
+        study_name=args.study_name,
+        storage=storage_name,
+        direction='maximize', # 우리는 'Val Acc'를 '최대화'하는 것이 목표
+        pruner=pruner,
+        load_if_exists=True # 이전에 중단된 study가 있으면 이어서 실행
     )
 
-    combined_train_dataset = ConcatDataset([train_dataset_source, train_dataset_target])
-
-    train_loader = DataLoader(
-        combined_train_dataset,
-        batch_size = config.BATCH_SIZE,
-        shuffle = True,
-        num_workers = config.NUM_WORKERS,
-        pin_memory = config.PIN_MEMORY
-    )
-    
-
-    # >> 검증용 데이터셋을 초기화한다.
-    val_dataset = NTURGBDDataset(
-        data_path = config.DATASET_PATH,
-        split = 'val',
-        max_frames = config.MAX_FRAMES,
-        protocol = args.protocol
-    )
-
-    # >> 검증용 데이터 로더를 설정한다.
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size = config.BATCH_SIZE,
-        shuffle = False,
-        num_workers = config.NUM_WORKERS,
-        pin_memory = config.PIN_MEMORY
-    )
-
-    model = SlowFast_GCNTransformer(
-        num_joints=config.NUM_JOINTS,
-        num_coords=config.NUM_COORDS,
-        num_classes=config.NUM_CLASSES,
-        fast_dims=config.FAST_DIMS, # config.py에서 FAST_DIMS 사용
-        slow_dims=config.SLOW_DIMS  # config.py에서 SLOW_DIMS 사용
-    ).to(device)
-    
-
-    # >> 손실 함수로 CrossEntropyLoss를 사용하며, 레이블 스무딩을 적용한다.
-    criterion_action = nn.CrossEntropyLoss(
-        label_smoothing=config.LABEL_SMOOTHING,
-        reduction='none'
-    )
-
-    # >> 피실험자 분류 손실 함수 (라벨 스무딩 없음)
-    criterion_subject = nn.CrossEntropyLoss()
-
-    # >> 옵티마이저로 AdamW를 사용하여 가중치 감쇠를 적용한다.
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr = config.LEARNING_RATE,
-        weight_decay = config.ADAMW_WEIGHT_DECAY
-    )
-
-    # >> 자동 혼합 정밀도(AMP) 학습을 위한 GradScaler를 초기화한다.
-    scaler = GradScaler()
-
-    
-    # >> get_scheduler 함수를 호출하여 스케줄러를 가져온다.
-    scheduler = get_scheduler(
-        optimizer,
-        scheduler_name=args.scheduler, # 커맨드 라인에서 받은 스케줄러 이름
-        total_epochs=config.EPOCHS,
-        warmup_epochs=config.WARMUP_EPOCHS
-    )
-
-
-    # >> 학습을 시작할 에폭, 최고 정확도 등 상태 변수를 초기화한다.
-    start_epoch = 0
-    best_accuracy = 0.0
-    last_val_acc = 0.0
-
-
-    # >> 체크포인트 파일이 저장될 경로를 설정한다.
-    checkpoint_path = os.path.join(config.SAVE_DIR, "best_model.pth.tar")
-
-
-    
-    # >> 저장된 체크포인트 파일이 있으면 학습을 이어서 진행한다.
-    if os.path.exists(checkpoint_path):
-        print(f"Resuming training from checkpoint '{checkpoint_path}'...")
-
-        # >> 체크포인트 파일을 불러와 모델과 옵티마이저의 상태를 복원한다.
-        checkpoint = load_checkpoint(checkpoint_path, model, optimizer, scheduler, device)
-
-        # >> 마지막으로 저장된 에폭 다음부터 학습을 시작한다.
-        start_epoch = checkpoint['epoch']
-
-        # >> 이전 학습에서 기록된 최고 정확도를 불러온다.
-        best_accuracy = checkpoint['best_acc']
-        last_val_acc = checkpoint.get('last_val_acc', 0.0)
-
-        history = checkpoint.get('history', {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []})
-
-        patience_counter = checkpoint.get('patience_counter', 0)
-        lr_drop_count = checkpoint.get('lr_drop_count', 0)
-        print(f"Loaded patience_counter: {patience_counter}, lr_drop_count: {lr_drop_count}")
-
-        # >> GradScaler의 상태도 복원한다.
-        if 'scaler' in checkpoint:
-            scaler.load_state_dict(checkpoint['scaler'])
-            print("GradScaler state loaded.")
-
-        if 'scheduler' not in checkpoint:
-            print("Warning: Scheduler state not found in checkpoint. Manually advancing scheduler...")
-            for _ in range(start_epoch):
-                scheduler.step()
-        else:
-            print("Scheduler state loaded successfully.")
-                
-        
-        print(f"Resuming from epoch {start_epoch}, with best accuracy {best_accuracy:.4f}")
-    else: # >> 체크포인트 파일이 없으면 처음부터 학습을 시작한다.
-        print("No checkpoint found, starting training from scratch.")
-        # >> 학습 및 검증 과정의 손실과 정확도를 기록할 딕셔너리를 초기화한다.
-        history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
-
-        patience_counter = 0
-        lr_drop_count = 0
-
-
+    # --- [OPTUNA] 2. Study 실행 ---
+    # study.optimize는 `run_trial` 함수를 `n_trials` 횟수만큼 호출합니다.
+    # lambda 함수를 사용해 `run_trial`에 `args` 인자를 전달합니다.
     try:
-        # >> 전체 에폭 학습 루프
-        for epoch in range(start_epoch, config.EPOCHS):
-            print(f"\n--- Epoch {epoch+1}/{config.EPOCHS} ---")
-            
-            # >> 한 에폭 동안 모델을 학습시킨다.
-            train_loss, train_acc_action, train_acc_subject = train_one_epoch(
-            model, train_loader, criterion_action, criterion_subject, optimizer, device, scaler
+        study.optimize(
+            lambda trial: run_trial(trial, args), 
+            n_trials=args.n_trials
         )
-            
-            # >> 한 에폭 동안 모델을 검증한다.
-            val_loss, val_acc_action, val_acc_subject = validate_one_epoch(
-            model, val_loader, criterion_action, criterion_subject, device
-        )
-            
-
-            # >> 현재 에폭의 학습 및 검증 결과를 history 딕셔너리에 추가한다.
-            history['train_loss'].append(train_loss)
-            history['train_acc'].append(train_acc_action)
-            history['val_loss'].append(val_loss)
-            history['val_acc'].append(val_acc_action)
-            
-            # >> 학습률 스케줄러를 다음 단계로 업데이트한다.
-            current_lr = scheduler.get_last_lr()[0]
-            scheduler.step()
-            
-            print(f"Epoch {epoch+1} Summary | Train Acc: {train_acc_action:.4f} | Val Acc: {val_acc_action:.4f} | LR: {current_lr:.6f}")
-            # >>피실험자 정확도 모니터링
-            print(f"(Adversarial) | Train Sub_Acc: {train_acc_subject:.4f} | Val Sub_Acc: {val_acc_subject:.4f}")
-
-            
-            
-            if val_acc_action > best_accuracy:
-                print(f"New best accuracy: {val_acc_action:.4f}! Saving model...")
-                best_accuracy = val_acc_action
-                patience_counter = 0 # 최고 기록 경신 시 카운터 초기화
-
-                # >> 현재 모델의 상태를 체크포인트 파일로 저장한다.
-                save_checkpoint({
-                    'epoch': epoch + 1,
-                    'state_dict': model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'scheduler': scheduler.state_dict(),
-                    'best_acc': best_accuracy,
-                    'scaler': scaler.state_dict(),
-                    'history': history,
-                    'last_val_acc': last_val_acc,
-                    'patience_counter': patience_counter, # 현재 값 (0) 저장
-                    'lr_drop_count': lr_drop_count      # 현재 LR Drop 횟수 저장
-                }, directory=config.SAVE_DIR, filename="best_model.pth.tar")
-
-            else: 
-                # --- Validation accuracy가 향상되지 않았을 때 ---
-                patience_counter += 1
-                print(f"No improvement in val acc. Patience: {patience_counter}/{LR_DROP_PATIENCE}. LR Drops: {lr_drop_count}/{MAX_LR_DROPS}.")
-
-                # 1. Patience가 2에 도달했는지 확인
-                if patience_counter >= LR_DROP_PATIENCE:
-                    
-                    # 2. LR Drop 횟수가 최대(2회) 미만인지 확인
-                    if lr_drop_count < MAX_LR_DROPS:
-                        # --- 학습률 1/10 감소 수행 ---
-                        lr_drop_count += 1
-                        patience_counter = 0 # LR 감소 후 Patience 카운터 초기화
-                        
-                        print(f"--- Triggering LR Drop #{lr_drop_count} ---")
-                        
-                        # 옵티마이저의 모든 파라미터 그룹의 LR을 1/2로 줄임
-                        for param_group in optimizer.param_groups:
-                            param_group['lr'] *= 0.5
-                        
-                        new_lr = optimizer.param_groups[0]['lr']
-                        print(f"Learning rate reduced to: {new_lr:.8f}")
-
-                    else:
-                        # --- 조기 종료 수행 ---
-                        # (LR Drop 2회 수행 후 또 Patience 2회 도달)
-                        print(f"Early stopping triggered: Max LR drops ({MAX_LR_DROPS}) reached and patience ({patience_counter}) exceeded.")
-                        break # 학습 루프 종료
-
-            # 현재 에폭이 T_0 주기로 나누어 떨어질 때 스냅샷을 저장합니다.
-            # (epoch + 1)을 사용하는 이유는 epoch가 0부터 시작하기 때문입니다. (e.g., 15번째 에폭은 epoch=14)
-            if (epoch + 1) % config.T_0 == 0:
-                print(f"Saving snapshot model at epoch {epoch + 1}")
-                save_checkpoint({
-                    'epoch': epoch + 1,
-                    'state_dict': model.state_dict(),
-                    'best_acc': val_acc, # 해당 스냅샷 시점의 정확도
-                }, directory=config.SAVE_DIR, filename=f"snapshot_epoch_{epoch+1}.pth.tar")
-                
-                
-            
-    
-    # >> 사용자가 Ctrl+C를 눌러 학습을 중단했을 때 실행된다.
     except KeyboardInterrupt:
-        print("\n\nUser interrupted training. Generating graph with current history...")
+        print("\nUser interrupted the Optuna study. Saving results...")
 
-
-           
-    # >> 학습이 정상적으로 모두 끝나거나, KeyboardInterrupt로 중단되었을 때 이 코드가 실행된다.
-    if history['train_acc']: # 기록이 한 번이라도 되었으면 그래프 생성
-        plot_history(history, "training_history.png")
-
-
-    # >> 최종적으로 가장 좋았던 모델의 성능을 출력한다.
-    if os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        best_val_acc = checkpoint['best_acc']
-        print(f"\nBest Validation Accuracy achieved: {best_val_acc:.4f} ({best_val_acc*100:.2f}%)")
+    # --- [OPTUNA] 3. 최종 결과 리포트 ---
+    print("\n--- Optuna Study Finished ---")
     
-    print("\nTraining finished.")
+    pruned_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
+    completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    
+    print(f"Study statistics: ")
+    print(f"  Total trials: {len(study.trials)}")
+    print(f"  Completed trials: {len(completed_trials)}")
+    print(f"  Pruned trials: {len(pruned_trials)}")
+
+    print("\n--- Best Trial ---")
+    best_trial = study.best_trial
+    print(f"  Value (Best Val Acc): {best_trial.value:.4f}")
+    print("  Params: ")
+    for key, value in best_trial.params.items():
+        # 값의 형태에 따라 소수점 포맷팅
+        if isinstance(value, float):
+            print(f"    {key}: {value:.6f}")
+        else:
+            print(f"    {key}: {value}")
+            
+    print(f"\nBest model saved in: {config.SAVE_DIR}/trial_{best_trial.number}/best_model.pth.tar")
+    print(f"To resume study, run the same command again.")
+    print(f"To analyze results, run: optuna-dashboard {storage_name}")
 
 
 if __name__ == '__main__':
+    # --- [OPTUNA] --- main() 함수가 Optuna 로직을 실행하도록 변경됨
     main()
