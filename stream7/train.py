@@ -37,7 +37,7 @@ from model import SlowFast_GCNTransformer
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
 # >> ASK: 새 Trail을 시작하고 싶을 때 터미널에서 실행하는 명령어
-# python manager.py --study-name my_study1 --ask
+# python manager.py --study-name my_study1 ask
 
 # >> Train: 위 명령어가 출력해준 python train.py ... 명령어를 복사하여 터미널에 붙여넣고 실행하기
 # 예시: python train.py --protocol xsub --scheduler ... --trial-number 5 --lr 0.000123 ...
@@ -46,7 +46,7 @@ from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
 # >> 종료: 훈련이 특정 epoch까지 모두 완료되면 터미널에서 최종 안내가 나온다.
 # To report this result to Optuna, run the following command:
-# python manager.py --tell --trial-number 5 --value 0.9123
+# python manager.py tell --trial-number 5 --value 0.9123
 
 # >> Tell: 위 문구를 복사하여 터미널에서 실행
 # python manager.py --study-name my_study1 --tell --trial-number 5 --value 0.9123
@@ -489,7 +489,7 @@ def run_trial(args):
             current_lr = scheduler.get_last_lr()[0]
             scheduler.step()
                 
-            epoch_time = time.time() - epoch_time
+            epoch_time = time.time() - epoch_start_time
             print(f"Epoch {epoch+1} Summary | Train Acc: {train_acc_action:.4f} | Val Acc: {val_acc_action:.4f} | LR: {current_lr:.6f} | Time: {epoch_time:.1f}s")
             print(f"(Adversarial) | Train Sub_Acc: {train_acc_subject:.4f} | Val Sub_Acc: {val_acc_subject:.4f}")
 
@@ -597,6 +597,8 @@ def main():
 
     # Optuna 스터디 관련 인자('--study-name', '--n-trials')를 제거하고,
     # 하이퍼파라미터 인자를 추가합니다.
+    parser.add_argument('--study-name', type=str, required=True,
+                        help="Optuna study name (provided by manager.py --ask)")
     parser.add_argument('--trial-number', type=int, required=True,
                         help="Optuna trial number (provided by manager.py --ask)")
     parser.add_argument('--lr', type=float, default=config.LEARNING_RATE,
@@ -622,8 +624,8 @@ def main():
     print(f"Best Validation Accuracy: {best_acc:.4f}")
     print(f"\n[Action Required]")
     print(f"To report this result to Optuna, run the following command:")
-    print(f"python manager.py --tell --trial-number {args.trial_number} --value {best_acc:.4f}")
-
+    print(f"python manager.py --study-name {args.study_name} tell --trial-number {args.trial_number} --value {best_acc:.4f}")
+    
 
 if __name__ == '__main__':
     # main() 함수는 이제 Optuna 대신 단일 트라이얼을 실행합니다.

@@ -14,6 +14,7 @@ from tqdm import tqdm
 import argparse
 from torch.amp import autocast
 import numpy as np
+import os
 
 from thop import profile, clever_format
 from sklearn.manifold import TSNE
@@ -243,7 +244,7 @@ def evaluate_model(checkpoint_path, protocol, run_tsne):
         # GRL의 입력(input[0])이 GRL 직전의 `combined_summary` 특징
         all_features_list.append(input[0].detach().cpu())
 
-    if run_tsne and VIS_AVAILABLE:
+    if run_tsne:
         print("Registering t-SNE hook on 'model.grad_reversal' layer...")
         # GRL 레이어에 forward hook 등록
         model.grad_reversal.register_forward_hook(hook_fn)
@@ -286,7 +287,7 @@ def evaluate_model(checkpoint_path, protocol, run_tsne):
             correct_subject += (predicted_subject == subject_labels).sum().item()
 
             # --- t-SNE 데이터 수집 (Hook이 자동으로 수집) ---
-            if run_tsne and VIS_AVAILABLE:
+            if run_tsne:
                 all_action_labels_list.append(action_labels.cpu())
                 all_domain_labels_list.append(subject_labels.cpu()) # subject_label 사용
 
@@ -316,7 +317,7 @@ def evaluate_model(checkpoint_path, protocol, run_tsne):
     print(f"Subject Accuracy: {final_subject_acc * 100:.2f}% (GRL 성공 시 낮은 값)")
 
     # --- t-SNE 시각화 실행 ---
-    if run_tsne and VIS_AVAILABLE:
+    if run_tsne:
         generate_tsne_plot(
             all_features_list, 
             all_action_labels_list, 

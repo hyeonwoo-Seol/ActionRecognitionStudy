@@ -81,7 +81,8 @@ def main():
         # 사용자는 이 명령어를 복사/붙여넣기만 하면 됩니다.
         cmd_parts = [
             "python train.py",
-            "--protocol xsub",       # (필요시 xview로 변경)
+            f"--study-name {args.study_name}",
+            "--protocol xsub",
             "--scheduler cosine_decay", # (필요시 변경)
             f"--trial-number {trial.number}",
             f"--lr {params['LEARNING_RATE']}",
@@ -108,16 +109,16 @@ def main():
         try:
             # Optuna에게 "이 트라이얼은 이 값으로 완료되었다"고 보고
             study.tell(
-                trial_number=args.trial_number, 
-                value=args.value if trial_state == optuna.trial.TrialState.COMPLETE else None, 
-                state=trial_state
+                args.trial_number, 
+                args.value if trial_state == optuna.trial.TrialState.COMPLETE else None, 
+                trial_state
             )
             
             print(f"Successfully reported Trial {args.trial_number} as {args.state.upper()}.")
             if args.state == 'complete':
                 print(f"  Value: {args.value:.4f}")
             
-            print("\nRun 'python manager.py --ask' to get the next trial.")
+            print(f"\nRun 'python manager.py --study-name {args.study_name} ask' to get the next trial.")
             
         except Exception as e:
             print(f"\nError reporting trial: {e}")
