@@ -29,34 +29,16 @@ import matplotlib.pyplot as plt
 import argparse
 from torch.utils.data import ConcatDataset
 import time
-# import optuna
+import optuna
 import traceback
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
 from model import SlowFast_GCNTransformer
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
-# >> ASK: 새 Trail을 시작하고 싶을 때 터미널에서 실행하는 명령어
-# python manager.py --study-name my_study1 --ask
-
-# >> Train: 위 명령어가 출력해준 python train.py ... 명령어를 복사하여 터미널에 붙여넣고 실행하기
-# 예시: python train.py --protocol xsub --scheduler ... --trial-number 5 --lr 0.000123 ...
-
-# >> 중단/재시작: 훈련 기간 중 Ctrl+c를 눌러서 중단해도, 위에서 입력한 python train.py ... 명령어를 다시 실행하면 체크포인트를 불러와서 이어서 학습한다.
-
-# >> 종료: 훈련이 특정 epoch까지 모두 완료되면 터미널에서 최종 안내가 나온다.
-# To report this result to Optuna, run the following command:
-# python manager.py --tell --trial-number 5 --value 0.9123
-
-# >> Tell: 위 문구를 복사하여 터미널에서 실행
-# python manager.py --study-name my_study1 --tell --trial-number 5 --value 0.9123
-
-# >> ASK: 다음 트라이얼을 위해 ASK 부터 반복한다.
-
-# >> 실시간으로 현황 보기
-# optuna-dashboard sqlite:///my_study1.db
-
-
+# >> --study-name " "은 모든 실험 기록을 저장할 데이터베이스 파일(.db) 이름이다.
+# python train.py --protocol xsub --scheduler cosine_decay --study-name "slowfast_tuning_v1" --n-trials 50
+# >> 실시간 모니터링을 하려면 새 터미널에서 optuna-dashboard sqlite:///slowfast_tuning_v1.db 를 입력하라.
 
 # python train.py --scheduler cosine_decay or cosine_restarts
 # python train.py --protocol xsub or xview
@@ -73,11 +55,11 @@ from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
 # Optuna가 한 번의 Trial(시도)마다 학습할 최대 에폭 수
 # (값을 줄여서 더 많은 하이퍼파라미터를 빠르게 탐색하는 것이 유리합니다)
-MAX_EPOCHS_PER_TRIAL = config.EPOCHS 
-
-
-
-
+MAX_EPOCHS_PER_TRIAL = 30 
+# Optuna가 총 시도할 횟수
+N_TRIALS = 50 
+# Optuna가 가지치기(Pruning)를 시작하기 전, 최소한으로 학습을 보장할 에폭 수
+PRUNING_WARMUP_EPOCHS = 10
 
 def get_scheduler(optimizer, scheduler_name, total_epochs, warmup_epochs):
     print(f"Using '{scheduler_name}' scheduler.")
@@ -214,7 +196,7 @@ def train_one_epoch(model, loader, criterion_action, criterion_subject, optimize
             # >> 순전파를 수행하여 예측 결과를 얻는다.
             outputs_action, outputs_subject = model(data_fast, data_slow)
 
-            # --- 정답레이블 누수 방지 로직 ---
+            # --- [수정됨] 정보 누수 방지 로직 ---
 
             # 1. Action 손실을 샘플별로 계산 (reduction='none'이므로) (N,)
             loss_action_all = criterion_action(outputs_action, action_labels)
@@ -306,7 +288,7 @@ def validate_one_epoch(model, loader, criterion_action, criterion_subject, devic
                 # >> 손실을 계산한다.
                 loss_action_all = criterion_action(outputs_action, action_labels)
 
-                # 검증 시에는 텐서의 평균값을 손실로 사용
+                # [추가] 검증 시에는 텐서의 평균값을 손실로 사용
                 loss_action = loss_action_all.mean() 
 
                 loss_subject = criterion_subject(outputs_subject, subject_labels)
@@ -335,39 +317,37 @@ def validate_one_epoch(model, loader, criterion_action, criterion_subject, devic
             correct_action / total_samples, 
             correct_subject / total_samples)
 
-
-
-# Optuna의 'trial' 객체를 인자에서 제거합니다.
-# 대신 커맨드 라인 인자인 'args'를 받습니다.
-def run_trial(args):
-    try: # KeyboardInterrupt(Ctrl+C)를 잡기 위해 try 블록 시작
-        """단일 트라이얼을 실행하는 함수"""
+# --- [OPTUNA] ---
+# 기존 main() 함수의 내용을 Optuna가 호출할 'objective' 함수(run_trial)로 변경합니다.
+# --- [OPTUNA] ---
+def run_trial(trial, args):
+    try: # <<< [수정] KeyboardInterrupt를 잡기 위해 try 블록 시작
+        """Optuna가 단일 trial을 실행하기 위해 호출하는 함수"""
         
-        # >> 재현성을 위해 시드를 고정한다.
+        # >> 재현성을 위해 시드를 고정한다. (Optuna는 trial마다 다른 시드를 권장할 수 있으나,
+        #    하이퍼파라미터의 순수 효과를 보려면 시드 고정이 유리할 수 있습니다.)
         set_seed(config.SEED)
 
-
-        # 1. Optuna의 trial.suggest_... 대신 args에서 하이퍼파라미터를 받아
-        #    config.py의 값을 덮어씁니다.
-        config.LEARNING_RATE = args.lr
-        config.DROPOUT = args.dropout
-        config.ADVERSARIAL_ALPHA = args.alpha
-        config.PROB = args.prob
-        config.ADAMW_WEIGHT_DECAY = args.weight_decay
-        config.LABEL_SMOOTHING = args.smoothing
+        # --- [OPTUNA] 1. 하이퍼파라미터 제안 ---
+        # Optuna의 trial 객체를 사용하여 config.py의 값들을 '임시로' 덮어씁니다.
+        config.LEARNING_RATE = trial.suggest_float("LEARNING_RATE", 1e-4, 5e-4, log=True)
+        config.DROPOUT = trial.suggest_float("DROPOUT", 0.2, 0.5)
+        config.ADVERSARIAL_ALPHA = trial.suggest_float("ADVERSARIAL_ALPHA", 0.05, 0.3)
+        config.PROB = trial.suggest_float("PROB", 0.3, 0.7) # (증강 안 할 확률: 30% ~ 70%)
+        config.ADAMW_WEIGHT_DECAY = trial.suggest_float("ADAMW_WEIGHT_DECAY", 0.01, 0.1, log=True)
+        config.LABEL_SMOOTHING = trial.suggest_float("LABEL_SMOOTHING", 0.0, 0.15)
         
-
-        # 트라이얼 번호를 args에서 가져옵니다.
-        trial_number = args.trial_number
+        # (config.py에 있지만 이번 튜닝에서 제외할 파라미터는 기존 값을 사용합니다)
         
-        print(f"\n--- [Running Trial {trial_number}] ---")
+        print(f"\n--- [Trial {trial.number}] ---")
         print(f"Params: LR={config.LEARNING_RATE:.6f}, Dropout={config.DROPOUT:.3f}, Alpha={config.ADVERSARIAL_ALPHA:.3f}")
         print(f"        Prob={config.PROB:.3f}, WeightDecay={config.ADAMW_WEIGHT_DECAY:.4f}, Smoothing={config.LABEL_SMOOTHING:.3f}")
 
-        # --- 2. 학습 준비 ---
+        # --- [OPTUNA] 2. 학습 준비 (기존 main() 코드) ---
         device = config.DEVICE
 
-        # (데이터 로더는 덮어쓴 config.PROB 값 등을 참조하여 생성됩니다)
+        # (데이터 로더는 Optuna trial마다 새로 생성해야 합니다.
+        #  특히 ntu_data_loader.py가 config.PROB 값을 참조하기 때문입니다)
         train_dataset_source = NTURGBDDataset(
             data_path = config.DATASET_PATH, split = 'train',
             max_frames = config.MAX_FRAMES, protocol = args.protocol
@@ -413,16 +393,15 @@ def run_trial(args):
         scheduler = get_scheduler(
             optimizer,
             scheduler_name=args.scheduler,
-            total_epochs=MAX_EPOCHS_PER_TRIAL, # config.EPOCHS (예: 100)
+            total_epochs=MAX_EPOCHS_PER_TRIAL, # --- [OPTUNA] ---
             warmup_epochs=config.WARMUP_EPOCHS
         )
 
         best_accuracy = 0.0
         history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
 
-
-        # 트라이얼 번호(args.trial_number)를 기반으로 고유 폴더 생성
-        trial_save_dir = os.path.join(config.SAVE_DIR, f"trial_{trial_number}")
+        # --- [OPTUNA] --- 각 trial마다 고유한 체크포인트 폴더 생성
+        trial_save_dir = os.path.join(config.SAVE_DIR, f"trial_{trial.number}")
         os.makedirs(trial_save_dir, exist_ok=True)
 
         # --- 체크포인트 경로를 '최고 성능'과 '재시작용'으로 분리 ---
@@ -439,7 +418,7 @@ def run_trial(args):
 
         # 2. "재시작용" 체크포인트 파일이 "존재"하는지 확인
         if os.path.exists(resume_checkpoint_path):
-            print(f"\n--- [Trial {trial_number}] Resuming from checkpoint: {resume_checkpoint_path} ---")
+            print(f"\n--- [Trial {trial.number}] Resuming from checkpoint: {resume_checkpoint_path} ---")
             try:
                 # utils.py의 load_checkpoint 함수 사용
                 checkpoint = load_checkpoint(
@@ -447,7 +426,7 @@ def run_trial(args):
                 ) #
                 
                 # 4. 저장된 모든 상태 복원
-                start_epoch = checkpoint['epoch'] # <--- 이 값이 14라면, range(14, 100)이 됨
+                start_epoch = checkpoint['epoch'] # <--- 이 값이 14라면, range(14, 30)이 됨
                 best_accuracy = checkpoint['best_acc']
                 history = checkpoint.get('history', history) 
                 patience_counter = checkpoint.get('patience_counter', patience_counter)
@@ -459,19 +438,20 @@ def run_trial(args):
                 print(f"Resumed from Epoch {start_epoch}. Best Acc so far: {best_accuracy:.4f}")
 
             except Exception as e:
-                print(f"Error loading resume checkpoint for Trial {trial_number}: {e}")
+                print(f"Error loading resume checkpoint for Trial {trial.number}: {e}")
                 print("Starting from Epoch 0.")
                 start_epoch = 0 # 로드 실패 시 0부터 다시 시작
         else:
-            print(f"\n--- [Trial {trial_number}] No resume checkpoint found. Starting from Epoch 0. ---")
+            print(f"\n--- [Trial {trial.number}] No resume checkpoint found. Starting from Epoch 0. ---")
         
         
 
-        # config.EPOCHS (예: 100) 만큼 학습합니다.
 
+        
+        # --- [OPTUNA] --- config.EPOCHS 대신 MAX_EPOCHS_PER_TRIAL 사용
         for epoch in range(start_epoch, MAX_EPOCHS_PER_TRIAL):
             epoch_start_time = time.time()
-            print(f"\n--- [Trial {trial_number}] Epoch {epoch+1}/{MAX_EPOCHS_PER_TRIAL} ---")
+            print(f"\n--- [Trial {trial.number}] Epoch {epoch+1}/{MAX_EPOCHS_PER_TRIAL} ---")
         
             train_loss, train_acc_action, train_acc_subject = train_one_epoch(
                 model, train_loader, criterion_action, criterion_subject, optimizer, device, scaler
@@ -489,28 +469,16 @@ def run_trial(args):
             current_lr = scheduler.get_last_lr()[0]
             scheduler.step()
                 
-            epoch_time = time.time() - epoch_time
+            epoch_time = time.time() - epoch_start_time
             print(f"Epoch {epoch+1} Summary | Train Acc: {train_acc_action:.4f} | Val Acc: {val_acc_action:.4f} | LR: {current_lr:.6f} | Time: {epoch_time:.1f}s")
             print(f"(Adversarial) | Train Sub_Acc: {train_acc_subject:.4f} | Val Sub_Acc: {val_acc_subject:.4f}")
 
             if val_acc_action > best_accuracy:
                 best_accuracy = val_acc_action
                 patience_counter = 0 
-                print(f"New best accuracy for Trial {trial_number}: {val_acc_action:.4f}! Saving model...")
+                print(f"New best accuracy for Trial {trial.number}: {val_acc_action:.4f}! Saving model...")
                 
-
-                # 체크포인트에 Optuna의 'trial.params' 대신, 
-                # 'args'로부터 받은 파라미터 딕셔너리를 저장합니다.
-                optuna_params_dict = {
-                    "LEARNING_RATE": args.lr,
-                    "DROPOUT": args.dropout,
-                    "ADVERSARIAL_ALPHA": args.alpha,
-                    "PROB": args.prob,
-                    "ADAMW_WEIGHT_DECAY": args.weight_decay,
-                    "LABEL_SMOOTHING": args.smoothing
-                }
-
-                
+                # --- [OPTUNA] --- 고유한 경로에 저장
                 save_checkpoint({
                     'epoch': epoch + 1,
                     'state_dict': model.state_dict(),
@@ -521,7 +489,7 @@ def run_trial(args):
                     'history': history,
                     'patience_counter': patience_counter,
                     'lr_drop_count': lr_drop_count,
-                    'optuna_params': optuna_params_dict # --- [Ask-Tell 수정] ---
+                    'optuna_params': trial.params # --- [OPTUNA] --- 이 모델을 만든 파라미터 저장
                 }, directory=trial_save_dir, filename="best_model.pth.tar")
 
             else: 
@@ -529,19 +497,9 @@ def run_trial(args):
                 print(f"No improvement. Patience: {patience_counter}. LR Drops: {lr_drop_count}.")
                 
                 if patience_counter >= config.PATIENCE: 
-                    print(f"Early stopping triggered for Trial {trial_number} (Patience: {config.PATIENCE}).")
+                    print(f"Early stopping triggered for Trial {trial.number} (Patience: {config.PATIENCE}).")
                     break # 이 Trial의 학습 루프 조기 종료
                     
-
-            # 재시작 체크포인트에도 수정된 파라미터 딕셔너리를 저장합니다.
-            optuna_params_dict = {
-                "LEARNING_RATE": args.lr,
-                "DROPOUT": args.dropout,
-                "ADVERSARIAL_ALPHA": args.alpha,
-                "PROB": args.prob,
-                "ADAMW_WEIGHT_DECAY": args.weight_decay,
-                "LABEL_SMOOTHING": args.smoothing
-            }
 
             save_checkpoint({
                 'epoch': epoch + 1, # <--- 다음 에폭 번호(예: 14+1=15)를 저장
@@ -553,31 +511,37 @@ def run_trial(args):
                 'history': history,
                 'patience_counter': patience_counter, # 현재 Patience
                 'lr_drop_count': lr_drop_count,
-                'optuna_params': optuna_params_dict # --- [Ask-Tell 수정] ---
+                'optuna_params': trial.params
             }, directory=trial_save_dir, filename="resume_checkpoint.pth.tar")
                 
+            # --- [OPTUNA] 3. Pruning (가지치기) ---
+            # Optuna에 현재 epoch의 Val Acc를 보고합니다.
+            trial.report(val_acc_action, epoch)
 
+            # Optuna가 이 trial을 중단해야 한다고 결정했는지 확인합니다.
+            if epoch > PRUNING_WARMUP_EPOCHS and trial.should_prune():
+                print(f"--- [Trial {trial.number}] Pruned at epoch {epoch+1} (Val Acc: {val_acc_action:.4f}) ---")
+                # 가지치기 예외를 발생시켜 이 trial을 즉시 중단합니다.
+                raise optuna.TrialPruned()
 
         
+        # --- [OPTUNA] ---
         # 그래프를 trial마다 저장합니다.
         plot_history(history, os.path.join(trial_save_dir, "training_history.png"))
         
         # 이 trial의 최종 '최고 정확도'를 반환합니다.
+        # Optuna는 이 값을 최대화하는 방향으로 다음 파라미터를 탐색합니다.
         return best_accuracy
     
-    except KeyboardInterrupt: # <<< [Ask-Tell 수정] ---
+    except KeyboardInterrupt: # <<< [수정] run_trial 함수 내부에서 예외 처리
         print("\n\n-------------------------------------------------")
-        print(f"     [Trial {args.trial_number} 중단됨]")
-        print("       체크포인트가 저장되었습니다.")
-        print("    동일한 명령어를 다시 실행하면 이어서 학습합니다.")
+        print("          [Optuna Study 중단됨]")
+        print("      사용자에 의해 스터디가 중지되었습니다.")
+        print("   (Optuna DB에는 'FAIL'로 기록될 수 있습니다)")
+        print("  동일한 명령어를 다시 실행하면 새 Trial부터")
+        print("         스터디를 이어서 시작합니다.")
         print("-------------------------------------------------")
-        
-        # Optuna 스터디의 일부가 아니므로, 스크립트를 정상 종료(0)시킵니다.
-        sys.exit(0)
-
-        
-
-
+        sys.exit(0) # 스크립트 즉시 종료
 
 def main():
     # >> argparse를 사용하여 커맨드 라인 인자를 설정한다.
@@ -593,38 +557,79 @@ def main():
         '-p', '--protocol', type=str, default='xsub', choices=['xsub', 'xview'],
         help="Training protocol: 'xsub' (Cross-Subject) or 'xview' (Cross-View). Default: 'xsub'"
     )
-    
-
-    # Optuna 스터디 관련 인자('--study-name', '--n-trials')를 제거하고,
-    # 하이퍼파라미터 인자를 추가합니다.
-    parser.add_argument('--trial-number', type=int, required=True,
-                        help="Optuna trial number (provided by manager.py --ask)")
-    parser.add_argument('--lr', type=float, default=config.LEARNING_RATE,
-                        help="Learning Rate")
-    parser.add_argument('--dropout', type=float, default=config.DROPOUT,
-                        help="Dropout rate")
-    parser.add_argument('--alpha', type=float, default=config.ADVERSARIAL_ALPHA,
-                        help="Adversarial alpha (GRL strength)")
-    parser.add_argument('--prob', type=float, default=config.PROB,
-                        help="Data augmentation 'skip' probability")
-    parser.add_argument('--weight-decay', type=float, default=config.ADAMW_WEIGHT_DECAY,
-                        help="AdamW weight decay")
-    parser.add_argument('--smoothing', type=float, default=config.LABEL_SMOOTHING,
-                        help="Label smoothing value")
+    # --- [OPTUNA] --- 연구 이름을 받아 이어서 할 수 있도록 추가
+    parser.add_argument('--study-name', type=str, default="slowfast_gcn_tuning",
+                        help="Name for the Optuna study.")
+    parser.add_argument('--n-trials', type=int, default=N_TRIALS,
+                        help="Total number of trials to run.")
     
     args = parser.parse_args()
 
-    best_acc = run_trial(args) 
-    
+    print(f"--- Starting Optuna Study ---")
+    print(f"Study Name: {args.study_name}")
+    print(f"Protocol: {args.protocol}")
+    print(f"Total Trials: {args.n_trials}")
+    print(f"Epochs per Trial: {MAX_EPOCHS_PER_TRIAL}")
+    print(f"-----------------------------")
 
-    # 훈련이 완료되면, 사용자에게 결과를 Optuna에 보고하라고 안내합니다.
-    print(f"\n--- [Trial {args.trial_number}] Finished ---")
-    print(f"Best Validation Accuracy: {best_acc:.4f}")
-    print(f"\n[Action Required]")
-    print(f"To report this result to Optuna, run the following command:")
-    print(f"python manager.py --tell --trial-number {args.trial_number} --value {best_acc:.4f}")
+    # --- [OPTUNA] 1. Study 생성 ---
+    # Pruner: 중간 결과가 나쁜 trial을 조기 중단 (가지치기)
+    # MedianPruner: 다른 trial들의 '중간값'보다 성능이 나쁘면 중단
+    pruner = optuna.pruners.MedianPruner(
+        n_startup_trials=5, # 처음 5개 trial은 가지치기 안 함
+        n_warmup_steps=PRUNING_WARMUP_EPOCHS, # 10 에폭 전까지는 가지치기 안 함
+        interval_steps=1 # 1 에폭마다 가지치기 여부 확인
+    )
+    
+    # Storage: 모든 실험 결과를 SQLite 데이터베이스에 저장
+    # (스크립트가 중단되어도 'optuna_study.db' 파일에 기록이 남아 이어서 할 수 있음)
+    storage_name = f"sqlite:///{args.study_name}.db"
+
+    study = optuna.create_study(
+        study_name=args.study_name,
+        storage=storage_name,
+        direction='maximize', # 우리는 'Val Acc'를 '최대화'하는 것이 목표
+        pruner=pruner,
+        load_if_exists=True # 이전에 중단된 study가 있으면 이어서 실행
+    )
+
+    # [수정] main 함수의 try...except 블록을 제거
+    study.optimize(
+        lambda trial: run_trial(trial, args), 
+        n_trials=args.n_trials
+    )
+        
+    # --- [OPTUNA] 3. 최종 결과 리포트 ---
+    print("\n--- Optuna Study Finished ---")
+    
+    pruned_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
+    completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    
+    print(f"Study statistics: ")
+    print(f"  Total trials: {len(study.trials)}")
+    print(f"  Completed trials: {len(completed_trials)}")
+    print(f"  Pruned trials: {len(pruned_trials)}")
+
+    print("\n--- Best Trial ---")
+    try:
+        best_trial = study.best_trial
+        print(f"  Value (Best Val Acc): {best_trial.value:.4f}")
+        print("  Params: ")
+        for key, value in best_trial.params.items():
+            # 값의 형태에 따라 소수점 포맷팅
+            if isinstance(value, float):
+                print(f"    {key}: {value:.6f}")
+            else:
+                print(f"    {key}: {value}")
+                
+        print(f"\nBest model saved in: {config.SAVE_DIR}/trial_{best_trial.number}/best_model.pth.tar")
+    except ValueError:
+        print("  No completed trials found. Cannot determine best trial.")
+        
+    print(f"\nTo resume study, run the same command again.")
+    print(f"To analyze results, run: optuna-dashboard {storage_name}")
 
 
 if __name__ == '__main__':
-    # main() 함수는 이제 Optuna 대신 단일 트라이얼을 실행합니다.
+    # --- [OPTUNA] --- main() 함수가 Optuna 로직을 실행하도록 변경됨
     main()
