@@ -55,7 +55,7 @@ import time
 import traceback
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
-from model import SlowFast_GCNTransformer
+from model import SlowFast_Transformer
 from utils import calculate_accuracy, save_checkpoint, load_checkpoint
 
 
@@ -369,7 +369,7 @@ def run_trial(args):
         )
 
         # (덮어쓴 config 값으로 모델 생성)
-        model = SlowFast_GCNTransformer(
+        model = SlowFast_Transformer(
             num_joints=config.NUM_JOINTS,
             num_coords=config.NUM_COORDS,
             num_classes=config.NUM_CLASSES,

@@ -9,7 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description="Optuna Study Manager (Ask-and-Tell)")
     
     # --- 공통 인자 ---
-    parser.add_argument('--study-name', type=str, default="slowfast_gcn_tuning",
+    parser.add_argument('--study-name', type=str, default="slowfast_tuning",
                         help="Name for the Optuna study DB file (e.g., 'study.db')")
     
     subparsers = parser.add_subparsers(dest='command', required=True,

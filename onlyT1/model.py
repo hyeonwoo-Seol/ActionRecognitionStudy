@@ -84,100 +84,7 @@ def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     """
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
-# ## ---------------------------------------------------------------
-# NTU RGB+D 뼈대 구조를 Shift-GCN을 위한 3개의 인접 행렬로 분해한다.
-# Root: 자기 자신과 연결
-# Close: 몸의 중심에서 바깥으로 연결
-# Far: 밖에서 몸의 중심으로 연결
-# ## ----------------------------------------------------------------
-def get_ntu_shift_decompositions(num_joints):
-    if num_joints == 50:
-        base_num_joints = 25
-    else: # 기존 25개 관절 모델과의 호환성 유지
-        base_num_joints = num_joints
 
-
-    # >> 관절의 부모-자식 관계 정의 (부모 -> 자식)
-    parent_child_pairs = [
-        (20, 1), (1, 0), (20, 2), (2, 3),
-        (20, 4), (4, 5), (5, 6), (6, 7), (7, 21), (7, 22),
-        (20, 8), (8, 9), (9, 10), (10, 11), (11, 23), (11, 24),
-        (0, 12), (12, 13), (13, 14), (14, 15),
-        (0, 16), (16, 17), (17, 18), (18, 19)
-    ]
-
-
-    # >> 3가지 타입의 인접 행렬을 0으로 초기화한다.
-    base_adj_root = np.eye(base_num_joints)
-    base_adj_close = np.zeros((base_num_joints, base_num_joints))
-    base_adj_far = np.zeros((base_num_joints, base_num_joints))
-
-
-    # >> 정의된 관계에 따라 close와 far 행렬의 값을 1로 설정한다.
-    for parent, child in parent_child_pairs:
-        base_adj_close[parent, child] = 1
-        base_adj_far[child, parent] = 1
-
-
-    # >> 50개 관절의 경우, 25 x 25 행렬을 확장해서 50 x 50 블록 대각 행렬을 생성한다.
-    if num_joints == 50:
-        # >> np.kron은 두 행렬의 외적을 계산한다.
-        adj_root = np.kron(np.eye(2), base_adj_root)
-        adj_close = np.kron(np.eye(2), base_adj_close)
-        adj_far = np.kron(np.eye(2), base_adj_far)
-    else:
-        adj_root, adj_close, adj_far = base_adj_root, base_adj_close, base_adj_far
-
-
-    # >> numpy 배열을 torch 텐서로 변환하여 리스트에 저장한다.    
-    decompositions = [
-        torch.from_numpy(adj_root).float(),
-        torch.from_numpy(adj_close).float(),
-        torch.from_numpy(adj_far).float()
-    ]
-
-    # >> 3개의 인접 행렬을 하나의 텐서로 쌓아서 반환한다.
-    return torch.stack(decompositions)
-
-
-
-
-# ## -----------------------------------------------------
-# Shift-GCN
-# Skeleton 데이터의 공간적 관계를 학습하기 위해
-# 3가지로 분해된 인접 행렬을 사용하여 Graph Convolution을 수행한다.
-# ## ------------------------------------------------------
-class ShiftGraphConvolution(nn.Module):
-    def __init__(self, in_features, out_features, num_joints):
-        super().__init__()
-        # >> Shift-GCN용 인접 행렬 3개를 buffer로 등록한다.
-        self.register_buffer('adj_matrices', get_ntu_shift_decompositions(num_joints))
-        
-
-        # >> 학습 가능한 가중치를 선언한다.
-        self.weight = nn.Parameter(torch.FloatTensor(3, in_features, out_features))
-        
-        # >> Xavier 균등 분포로 가중치를 초기화한다.
-        nn.init.xavier_uniform_(self.weight)
-
-
-    def forward(self, x):
-        # x shape: (N, T, J, C_in)
-        
-        # >> x를 3개의 shift 타입에 적용하기 위해 (3, N, T, J, C_in) 형태로 확장한다.
-        x_expanded = x.unsqueeze(0).repeat(3, 1, 1, 1, 1)
-        
-        # >> 각 shift 타입에 맞는 인접행렬과 Feature를 곱한다. (그래프 shift 연산)
-        # (3, J, J) x (3, N, T, J, C_in) -> (3, N, T, J, C_in)
-        support = torch.einsum('sjj,sntjc->sntjc', self.adj_matrices, x_expanded)
-        
-        # >> 각 shift 타입에 맞는 가중치를 곱한다.
-        # (3, N, T, J, C_in) x (3, C_in, C_out) -> (3, N, T, J, C_out)
-        output = torch.einsum('sntjc,scd->sntjd', support, self.weight)
-        
-        # >> 3개의 결과를 합친다.
-        output = output.sum(dim=0) # (N, T, J, C_out)
-        return output
 
 
 
@@ -283,11 +190,12 @@ class SpatioTemporalPositionalEncoding(nn.Module):
 class ST_Transformer_Block(nn.Module):
     def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
         super().__init__()
+
+        # >> 차원 변환 표준 레이어다.
+        self.input_proj = nn.Linear(in_features, out_features)
+        self.norm_proj = RMSNorm(out_features)
+
         
-        self.gcn = ShiftGraphConvolution(in_features, out_features, num_joints=num_joints)
-
-        self.norm_gcn = RMSNorm(out_features)
-
         # >> Evo-ViT: 공간적 토큰 선택을 위한 [SPATIAL_CLS] 토큰 추가
         self.spatial_cls_token = nn.Parameter(torch.zeros(1, 1, out_features))
         self.spatial_keep_rate = config.SPATIAL_KEEP_RATE
@@ -307,7 +215,7 @@ class ST_Transformer_Block(nn.Module):
             nn.Dropout(0.2)
         )
         
-        # >> Fast Path - 별도 모듈 x
+        # >> Fast Path는 별도 모듈이 없어서 구현하지 않는다.
 
 
         # >> 2. 시간적 어텐션을 위한 Transformer 인코더이다.
@@ -331,18 +239,22 @@ class ST_Transformer_Block(nn.Module):
 
     def forward(self, x, prev_spatial_attn_scores=None):
         # x shape: (N, T, J, C)
-        N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.gcn.weight.shape[-1]
+        # >> C_out을 self.spatial_cls_token에서 가져온다.
+        N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.spatial_cls_token.shape[-1]
         
         # >> 잔차 연결을 위해 초기 입력을 저장한다.
         res = self.residual(x)
 
-        x_gcn = self.norm_gcn(self.gcn(x)) # (N, T, J, C_out)
+        # >> 차원 C_in을 C_out으로 변경한다.
+        x_proj = self.norm_proj(self.input_proj(x)) # (N, T, J, C_out)
 
-        res_spatial = x_gcn
+        # >> 공간적 잔차 연결을 위해 프로젝션 결과를 저장한다.
+        res_spatial = x_proj
         
         # >> (N, T, J, C) -> (N*T, J, C)
-        x_spatial_in = x_gcn.contiguous().view(N * T, J, C_out)
-        NT, J, C = x_spatial_in.shape        
+        # >> 프로젝션 출력을 Spatial-Transformer의 입력으로 사용한다.
+        x_spatial_in = x_proj.contiguous().view(N * T, J, C_out)
+        NT, J, C = x_spatial_in.shape
 
 
         # --- 1. Evo-ViT 공간적 토큰 선택 ---
@@ -445,7 +357,9 @@ class ST_Transformer_Block(nn.Module):
         
         # >> (N*T, J, C) -> (N, T, J, C)
         x_spatial_out = x_spatial_out.view(N, T, J, C_out)
-        x_spatial_out = x_spatial_out + res_spatial # GCN 이후 잔차 연결
+
+        # >> 프로젝션 잔차를 더한다.
+        x_spatial_out = x_spatial_out + res_spatial
 
 
         # >> 7. 시간 Transformer 어텐션
@@ -457,7 +371,6 @@ class ST_Transformer_Block(nn.Module):
         x_temporal_out = x_temporal_attn.view(N, J, T, C_out).permute(0, 2, 1, 3).contiguous()
 
 
-
         # >> 8. 최종 잔차 연결
         x_final = x_temporal_out + res
 
@@ -467,12 +380,12 @@ class ST_Transformer_Block(nn.Module):
     
 
 # ## -------------------------------------------------------------------------
-# SlowFast GCN-Transformer
+# SlowFast Transformer
 # GCN-Transformer 컴포넌트를 재사용하여 비대칭적인 2-스트림 모델을 구현한다.
 # - Fast Pathway: 가벼운 네트워크로 높은 시간 해상도를 처리 (2프레임 간격)
 # - Slow Pathway: 무거운 네트워크로 낮은 시간 해상도를 처리 (4프레임 간격)
 # ## -------------------------------------------------------------------------
-class SlowFast_GCNTransformer(nn.Module):
+class SlowFast_Transformer(nn.Module):
     def __init__(self,
                  num_joints=config.NUM_JOINTS,
                  num_coords=config.NUM_COORDS,

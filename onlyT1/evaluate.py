@@ -25,8 +25,8 @@ import seaborn as sns
 # 직접 작성한 파일들 임포트
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
-# SlowFast_GCNTransformer
-from model import SlowFast_GCNTransformer 
+# SlowFast_Transformer
+from model import SlowFast_ransformer 
 from utils import load_checkpoint
 
 ## #--------------------------------------------------------------------
@@ -140,7 +140,7 @@ def calculate_flops(model, device):
 
     except Exception as e:
         print(f"Error during FLOPs calculation with thop: {e}")
-        print("이것은 'thop'가 사용자님의 모델에 있는 커스텀 모듈(예: ShiftGraphConvolution)을")
+        print("이것은 'thop'가 사용자님의 모델에 있는 커스텀 모듈을")
         print("인식하지 못할 때 발생할 수 있습니다. 이 경우 FLOPs 계산은 실패합니다.")
     print("---------------------------\n") # 파라미터 계산 후 출력으로 이동
 
@@ -215,7 +215,7 @@ def evaluate_model(checkpoint_path, protocol, run_tsne):
     )
 
     # 모델 초기화
-    model = SlowFast_GCNTransformer(
+    model = SlowFast_Transformer(
         num_joints=config.NUM_JOINTS,
         num_coords=config.NUM_COORDS,
         num_classes=config.NUM_CLASSES,
@@ -326,7 +326,7 @@ def evaluate_model(checkpoint_path, protocol, run_tsne):
         )
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Evaluate the SlowFast GCN-Transformer model.")
+    parser = argparse.ArgumentParser(description="Evaluate the SlowFast Transformer model.")
     parser.add_argument('-c', '--checkpoint', type=str, required=True,
                         help="Path to the model checkpoint file (e.g., 'checkpoints/best_model.pth.tar')")
     # [추가됨] X-Sub / X-View 선택
