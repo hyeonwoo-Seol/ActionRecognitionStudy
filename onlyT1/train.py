@@ -222,7 +222,7 @@ def train_one_epoch(model, loader, criterion_action, criterion_subject, optimize
 
             
             # GRL을 사용하므로, 두 손실을 config의 alpha 값으로 더함
-            loss = loss_action + (config.ADVERSARIAL_ALPHA * loss_subject)
+            loss = loss_action + loss_subject
 
             
         # ## ------------------------------------------------------------------------------
@@ -373,7 +373,8 @@ def run_trial(args):
             num_coords=config.NUM_COORDS,
             num_classes=config.NUM_CLASSES,
             fast_dims=config.FAST_DIMS,
-            slow_dims=config.SLOW_DIMS
+            slow_dims=config.SLOW_DIMS,
+            alpha=config.ADVERSARIAL_ALPHA
         ).to(device)
 
         # (덮어쓴 config 값으로 손실 함수, 옵티마이저 생성)
