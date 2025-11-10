@@ -560,7 +560,7 @@ def run_trial(args):
 
 def main():
     # >> argparse를 사용하여 커맨드 라인 인자를 설정한다.
-    parser = argparse.ArgumentParser(description="Train GCN-Transformer model.")
+    parser = argparse.ArgumentParser(description="Train Transformer model.")
     parser.add_argument(
         '--scheduler', 
         type=str, 

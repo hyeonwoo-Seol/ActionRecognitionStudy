@@ -26,7 +26,7 @@ import seaborn as sns
 import config
 from ntu_data_loader import NTURGBDDataset, DataLoader
 # SlowFast_Transformer
-from model import SlowFast_ransformer 
+from model import SlowFast_Transformer 
 from utils import load_checkpoint
 
 ## #--------------------------------------------------------------------

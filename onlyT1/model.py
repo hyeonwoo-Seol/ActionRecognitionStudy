@@ -190,15 +190,13 @@ class SpatioTemporalPositionalEncoding(nn.Module):
 class ST_Transformer_Block(nn.Module):
     def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
         super().__init__()
+        self.out_features = out_features
 
         # >> 차원 변환 표준 레이어다.
         self.input_proj = nn.Linear(in_features, out_features)
         self.norm_proj = RMSNorm(out_features)
 
         
-        # >> Evo-ViT: 공간적 토큰 선택을 위한 [SPATIAL_CLS] 토큰 추가
-        self.spatial_cls_token = nn.Parameter(torch.zeros(1, 1, out_features))
-        self.spatial_keep_rate = config.SPATIAL_KEEP_RATE
         self.num_joints = num_joints
 
         # >> Slow Fast
@@ -214,8 +212,6 @@ class ST_Transformer_Block(nn.Module):
             nn.Linear(dim_feedforward, out_features),
             nn.Dropout(0.2)
         )
-        
-        # >> Fast Path는 별도 모듈이 없어서 구현하지 않는다.
 
 
         # >> 2. 시간적 어텐션을 위한 Transformer 인코더이다.
@@ -237,10 +233,10 @@ class ST_Transformer_Block(nn.Module):
             self.residual = nn.Identity()
 
 
-    def forward(self, x, prev_spatial_attn_scores=None):
+    def forward(self, x):
         # x shape: (N, T, J, C)
         # >> C_out을 self.spatial_cls_token에서 가져온다.
-        N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.spatial_cls_token.shape[-1]
+        N, T, J, C_out = x.shape[0], x.shape[1], x.shape[2], self.out_features
         
         # >> 잔차 연결을 위해 초기 입력을 저장한다.
         res = self.residual(x)
@@ -256,113 +252,32 @@ class ST_Transformer_Block(nn.Module):
         x_spatial_in = x_proj.contiguous().view(N * T, J, C_out)
         NT, J, C = x_spatial_in.shape
 
-
-        # --- 1. Evo-ViT 공간적 토큰 선택 ---
-        k = int(J * self.spatial_keep_rate) # 유지할 중요 관절(informative) 수
-
-        if prev_spatial_attn_scores is None:
-            # >> 이전 어텐션 맵이 없음 (첫 번째 블록) -> 모든 토큰을 Slow 경로로
-            indices_to_keep = torch.arange(J, device=x.device).unsqueeze(0).repeat(NT, 1)
-            indices_to_drop = torch.empty(NT, 0, dtype=torch.long, device=x.device)
-            # >> 점수도 없으므로 가중치 없는 평균 집계 사용
-            placeholder_scores_norm = None 
-        else:
-            # >> 이전 어텐션 맵을 기반으로 토큰 선택
-            scores = prev_spatial_attn_scores # (NT, J)
-            all_indices = torch.argsort(scores, dim=1, descending=True)
-            indices_to_keep = all_indices[:, :k] # (NT, k)
-            indices_to_drop = all_indices[:, k:] # (NT, J-k)
-            
-            # >> 집계(Aggregation)를 위한 가중치 계산
-            placeholder_scores = torch.gather(scores, 1, indices_to_drop)
-            placeholder_scores_norm = torch.softmax(placeholder_scores, dim=1).unsqueeze(-1) # (NT, J-k, 1)
-
-
-        # --- 2. Slow-Fast 토큰 분리 ---
-        
-        # >> 2-1. 중요 토큰 (Informative tokens)
-        # (NT, J, C) -> (NT, k, C)
-        x_inf = torch.gather(x_spatial_in, 1, indices_to_keep.unsqueeze(-1).expand(-1, -1, C))
-        
-        # >> 2-2. 자리 표시자 토큰 (Placeholder tokens)
-        # (NT, J, C) -> (NT, J-k, C)
-        x_ph = torch.gather(x_spatial_in, 1, indices_to_drop.unsqueeze(-1).expand(-1, -1, C))
-
-        # >> 2-3. 대표 토큰 (Representative token) - 집계
-        if prev_spatial_attn_scores is None or k == J:
-            x_rep = torch.empty(NT, 0, C, device=x.device) # (첫 블록이거나 모두 keep이면 rep 없음)
-        else:
-            # 가중 합 (Weighted Sum)
-            x_rep = (x_ph * placeholder_scores_norm).sum(dim=1, keepdim=True) # (NT, 1, C)
-
-        # >> 2-4. [SPATIAL_CLS] 토큰 준비
-        cls_token = self.spatial_cls_token.repeat(NT, 1, 1) # (NT, 1, C)
-        
-        # >> 2-5. Slow 경로 입력 준비: [CLS, Informative, Representative]
-        x_slow_in = torch.cat([cls_token, x_inf, x_rep], dim=1) # (NT, 1+k+1 또는 1+k, C)
-
-        # --- 3. Slow 경로 연산 (MSA + FFN) ---
-        
-        # >> 3-1. MSA
-        x_norm1 = self.spatial_norm1(x_slow_in)
-        # average_attn_weights=False (기본값) -> (NT, nhead, L, S) 반환
-        attn_output, new_attn_weights = self.spatial_msa(
+        # >> MSA
+        x_norm1 = self.spatial_norm1(x_spatial_in)
+        # >> 
+        attn_output, _ = self.spatial_msa(
             x_norm1, x_norm1, x_norm1, average_attn_weights=False
         )
-        x_slow_msa_out = x_slow_in + attn_output # (잔차 연결 1)
+        x_msa_out = x_spatial_in + attn_output # (잔차 연결 1)
+
+
         
-        # >> 3-2. FFN
-        x_norm2 = self.spatial_norm2(x_slow_msa_out)
+        # >> FFN
+        x_norm2 = self.spatial_norm2(x_msa_out)
         ffn_output = self.spatial_ffn(x_norm2)
-        x_slow_final = x_slow_msa_out + ffn_output # (잔차 연결 2)
+        x_spatial_out_NT = x_msa_out + ffn_output # (잔차 연결 2)
 
-        # --- 4. 다음 레이어를 위한 어텐션 맵 추출 ---
-        # (NT, nhead, 1+k+..., 1+k+...)
-        # CLS 토큰(idx 0)이 다른 토큰(idx 1:)에 부여한 어텐션
-        next_cls_attn_to_others = new_attn_weights[:, :, 0, 1:].mean(dim=1) # (NT, k+1 또는 k)
-
-        next_spatial_attn = torch.zeros(NT, J, device=x.device, dtype=x.dtype)
-        
-        # 중요 토큰(informative)에 대한 어텐션 점수
-        cls_attn_to_inf = next_cls_attn_to_others[:, :indices_to_keep.shape[1]]
-        next_spatial_attn.scatter_(1, indices_to_keep, cls_attn_to_inf)
-        
-        if prev_spatial_attn_scores is not None and k != J:
-            # 대표 토큰(representative)에 대한 어텐션 점수
-            cls_attn_to_rep = next_cls_attn_to_others[:, k:] # (NT, 1)
-            # 대표 점수를 모든 자리 표시자(placeholder) 토큰에 전파
-            next_spatial_attn.scatter_(1, indices_to_drop, cls_attn_to_rep.expand(-1, J-k))
-
-
-        # --- 5. Fast 경로 연산 (확장)  ---
-        
-        if prev_spatial_attn_scores is None or k == J:
-            x_ph_out = x_ph # (첫 블록이거나 모두 keep이면 fast update 없음)
-        else:
-            # >> 5-1. Slow 경로에서 대표 토큰의 '잔차'만 추출
-            msa_res_rep = attn_output[:, 1+k:, :]
-            ffn_res_rep = ffn_output[:, 1+k:, :]
-            x_rep_res_combined = msa_res_rep + ffn_res_rep # (NT, 1, C)
-
-            # >> 5-2. 잔차를 모든 자리 표시자 토큰에 더함
-            x_ph_out = x_ph + x_rep_res_combined.expand(-1, J-k, -1) # (NT, J-k, C)
-            
-        # --- 6. 전체 텐서 재구성 (Scatter) ---
-        num_inf_tokens = indices_to_keep.shape[1]
-        x_inf_out = x_slow_final[:, 1:1 + num_inf_tokens, :]
-        
-        x_spatial_out = torch.zeros_like(x_spatial_in)
-        x_spatial_out.scatter_(1, indices_to_keep.unsqueeze(-1).expand(-1, -1, C), x_inf_out)
-        x_spatial_out.scatter_(1, indices_to_drop.unsqueeze(-1).expand(-1, -1, C), x_ph_out)
         
         # >> (N*T, J, C) -> (N, T, J, C)
-        x_spatial_out = x_spatial_out.view(N, T, J, C_out)
+        x_spatial_out = x_spatial_out_NT.view(N, T, J, C_out)
 
         # >> 프로젝션 잔차를 더한다.
         x_spatial_out = x_spatial_out + res_spatial
 
 
-        # >> 7. 시간 Transformer 어텐션
+        
+
+        # >> 시간 Transformer 어텐션
         x_reshaped_temporal = x_spatial_out.permute(0, 2, 1, 3).contiguous().view(N * J, T, C_out)
         x_temporal_attn = self.temporal_transformer_encoder(x_reshaped_temporal)
 
@@ -371,17 +286,14 @@ class ST_Transformer_Block(nn.Module):
         x_temporal_out = x_temporal_attn.view(N, J, T, C_out).permute(0, 2, 1, 3).contiguous()
 
 
-        # >> 8. 최종 잔차 연결
-        x_final = x_temporal_out + res
-
         # >> (최종 결과, 다음 블록용 어텐션 맵) 반환
-        return x_final, next_spatial_attn
+        return x_temporal_out
     
     
 
 # ## -------------------------------------------------------------------------
 # SlowFast Transformer
-# GCN-Transformer 컴포넌트를 재사용하여 비대칭적인 2-스트림 모델을 구현한다.
+# Transformer 컴포넌트를 재사용하여 비대칭적인 2-스트림 모델을 구현한다.
 # - Fast Pathway: 가벼운 네트워크로 높은 시간 해상도를 처리 (2프레임 간격)
 # - Slow Pathway: 무거운 네트워크로 낮은 시간 해상도를 처리 (4프레임 간격)
 # ## -------------------------------------------------------------------------
@@ -519,9 +431,6 @@ class SlowFast_Transformer(nn.Module):
         # (N, T, J, C)에 2D PE를 직접 적용
         x_slow = self.slow_pos_encoder(x_slow) # (N, T_slow, J, C_slow0)
         
-        # --- 4. GCN-Transformer 블록 및 다단계 융합 처리 ---
-        fast_attn_map = None # (N*T_fast, J)
-        slow_attn_map = None # (N*T_slow, J)
 
         # len(self.fast_blocks)는 2 (i=0, i=1)
         for i in range(len(self.fast_blocks)):
@@ -538,13 +447,13 @@ class SlowFast_Transformer(nn.Module):
             # (N, C_slow_i, T_slow, J) -> (N, T_slow, J, C_slow_i)
             x_fused = x_fused.permute(0, 2, 3, 1).contiguous()
 
-            # [핵심 융합] Slow 경로에 Fast 경로의 정보를 더합니다.
+            # Slow 경로에 Fast 경로의 정보를 더합니다.
             x_slow = x_slow + x_fused
             
             
             # --- B. GCN-Transformer 블록 실행 ---
-            x_fast, fast_attn_map = self.fast_blocks[i](x_fast, fast_attn_map)
-            x_slow, slow_attn_map = self.slow_blocks[i](x_slow, slow_attn_map)
+            x_fast = self.fast_blocks[i](x_fast)
+            x_slow = self.slow_blocks[i](x_slow)
             
         # --- 5. 최종 풀링 및 분류 ---
         summary_fast = self.fast_pool(x_fast) # (N, C_fast_final)
