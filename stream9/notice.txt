@@ -1,0 +1,2 @@
+이 디렉터리는 Shift-GCN과 St-Transformer가 결합된 부분까지만 model.py를 수정한 디렉토리다.
+여기서 shift-GCN을 제거하는 코드는 onlyT1에서 진행하고자 한다.
