@@ -235,40 +235,6 @@ def _read_skeleton_file(filepath):
 
 
 
-# ## --------------------------------------------------------------------------------
-# 사람마다 다른 신체 크기 영향을 줄이기 위해 척추 길이를 기준으로 3D 스켈레톤 좌표를 정규화한다.
-# 모든 좌표를 척추 길이로 나누어 스켈레톤의 상대적인 크기를 일정하게 만든다.
-# ## --------------------------------------------------------------------------------
-def _normalize_by_bone_length(coords):
-    # >> 기준 관절 인덱스를 정의한다.
-    SPINE_SHOULDER_JOINT = 20 # 척추 상단 (어깨 중심)
-    SPINE_BASE_JOINT = 0 # 척추 하단 (골반 중심)
-    
-
-    # >> 각 프레임, 각 사람(person)에 대해 기준 관절의 좌표를 선택한다.
-    # >> shape: (num_frames, 2, 1, 3)
-    ref_joint1_coords = coords[:, :, SPINE_SHOULDER_JOINT:SPINE_SHOULDER_JOINT+1, :]
-    ref_joint2_coords = coords[:, :, SPINE_BASE_JOINT:SPINE_BASE_JOINT+1, :]
-    
-
-    # >> 척추 길이(유클리드 거리)를 계산한다. 0으로 나누는 것을 방지하기 위해 작은 값을 더한다.
-    # >> shape: (num_frames, 2, 1)
-    torso_lengths = np.linalg.norm(ref_joint1_coords - ref_joint2_coords, axis=-1) + 1e-8
-
-
-    # >> 모든 좌표에 나누기 연산을 적용하기 위해 브로드캐스팅이 가능하도록 차원을 추가한다.
-    # >> 넘파이의 브로드캐스팅은 서로 다른 shape의 배열간에도 산술 연산이 가능하게 해준다.
-    # >> (num_frames, 2, 1) -> (num_frames, 2, 1, 1)
-    torso_lengths = np.expand_dims(torso_lengths, axis=-1)
-    
-
-    # >> 모든 관절 좌표를 해당 프레임의 척추 길이로 나눈다.
-    normalized_coords = coords / torso_lengths
-    
-    return normalized_coords
-
-
-
 
 # ## ------------------------------------------------------------------------------
 # 두 3D 벡터 배치 간의 각도를 계산하는 헬퍼 함수이다.
@@ -328,13 +294,9 @@ def _calculate_features(coords):
 
 
     # >> 1. 동적 특징 계산 (4D)
-    # >> 스켈레톤 중심화
-    center_joint = coords[:, :, 0:1, :]
-    centered_coords = coords - center_joint
-
-    # >> 변위 계산
-    displacement = np.zeros_like(centered_coords)
-    displacement[1:] = centered_coords[1:] - centered_coords[:-1]
+    # >> 원본 coords (T, 2, 25, 3)을 기준으로 변위 계산 
+    displacement = np.zeros_like(coords)
+    displacement[1:] = coords[1:] - coords[:-1]
     
     # >> 거리 계산
     distance = np.linalg.norm(displacement, axis=-1, keepdims=True)
@@ -454,11 +416,20 @@ def _calculate_features(coords):
     inter_dist_feat_1 = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
     inter_dist_feat_2 = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
 
-    inter_dist_feat_1[:, :, 7, 0] = norm_dist_hands   # 오른손
-    inter_dist_feat_1[:, :, 15, 0] = norm_dist_feet  # 오른발
-    inter_dist_feat_2[:, :, 7, 0] = norm_dist_rh_rf  # 오른손
-    inter_dist_feat_2[:, :, 11, 0] = norm_dist_lh_lf # 왼손
+    # >> (T, 2) -> (T, 2, 1)로 브로드캐스팅 준비
+    norm_dist_hands = norm_dist_hands[..., np.newaxis]
+    norm_dist_feet = norm_dist_feet[..., np.newaxis]
+    norm_dist_rh_rf = norm_dist_rh_rf[..., np.newaxis]
+    norm_dist_lh_lf = norm_dist_lh_lf[..., np.newaxis]
 
+    # >> 비대칭 할당 -> 대칭 할당
+    inter_dist_feat_1[:, :, [7, 11], 0] = norm_dist_hands   # 오른손(7)과 왼손(11) 모두에 할당
+    inter_dist_feat_1[:, :, [15, 19], 0] = norm_dist_feet  # 오른발(15)과 왼발(19) 모두에 할당
+    inter_dist_feat_2[:, :, [7, 15], 0] = norm_dist_rh_rf  # 오른손(7)과 오른발(15) 모두에 할당
+    inter_dist_feat_2[:, :, [11, 19], 0] = norm_dist_lh_lf # 왼손(11)과 왼발(19) 모두에 할당
+
+
+    
     # >> 5. 두 명의 중심 거리 (1D)
     # >> 5-1. P0와 P1의 척추 하단(0번 관절) 좌표
     # coords shape은 (T, 2, 25, 3) 입니다
