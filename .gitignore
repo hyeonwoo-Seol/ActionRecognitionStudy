@@ -16,6 +16,7 @@ env/
 *.zip
 *.gz
 *.tar
+*:Zone.Identifier
 data/
 datasets/
 *.gif
@@ -28,6 +29,7 @@ datasets/
 *.pb
 *.pkl
 *.joblib
+*.db
 models/
 checkpoints/
 logs/

@@ -28,10 +28,10 @@ SPATIAL_KEEP_RATE = 0.7 # 공간적 어텐션에서 '중요 관절'로 유지할
 NUM_SUBJECTS = 2
 
 # >> 학습 하이퍼파라미터
-EPOCHS = 30               # 총 학습 에폭
+EPOCHS = 20               # 총 학습 에폭
 LEARNING_RATE = 0.0003   
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
-WARMUP_EPOCHS = 10         # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수 
+WARMUP_EPOCHS = 7         # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수 
 GRAD_CLIP_NORM = 1.0       # 그레이디언트 폭발을 막기 위한 클리핑 최대 L2 Norm 값 
 ADAMW_WEIGHT_DECAY = 0.05  # AdamW weight decay , L2 정규화의 강도 설정
 PATIENCE = 10              # 조기종료 변수
@@ -44,4 +44,4 @@ ADVERSARIAL_ALPHA = 0.5    # 적대적 학습의 강도
 
 # >> DIMS 사용법은, [입력 크기, 출력 크기]이다. 만약 4층을 쌓으려면 [64, 128, 128, 256, 256] 하면 된다.
 FAST_DIMS = [32, 32, 64]       # Fast: 가볍게
-SLOW_DIMS = [32, 32, 64]    # Slow: 무겁게 [128, 128, 256]
+SLOW_DIMS = [96, 96, 192]    # Slow: 무겁게, 이전 값: [128, 128, 256]
