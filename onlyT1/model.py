@@ -188,10 +188,14 @@ class SpatioTemporalPositionalEncoding(nn.Module):
 # 순차적으로 Transformer 어텐션을 적용하여 시공간 특징을 분리하여 학습한다.
 # ## -------------------------------------------------------------------------
 class ST_Transformer_Block(nn.Module):
-    def __init__(self, in_features, out_features, num_joints, nhead=4, dim_feedforward=256):
+    def __init__(self, in_features, out_features, num_joints, nhead=4, pos_encoder=None):
         super().__init__()
         self.out_features = out_features
 
+        dim_feedforward = out_features * 2
+
+        self.pos_encoder = pos_encoder
+        
         # >> 차원 변환 표준 레이어다.
         self.input_proj = nn.Linear(in_features, out_features)
         self.norm_proj = RMSNorm(out_features)
@@ -244,6 +248,10 @@ class ST_Transformer_Block(nn.Module):
         # >> 차원 C_in을 C_out으로 변경한다.
         x_proj = self.norm_proj(self.input_proj(x)) # (N, T, J, C_out)
 
+        # >> PE를 적용한다.
+        if self.pos_encoder is not None:
+            x_proj = self.pos_encoder(x_proj)
+
         # >> 공간적 잔차 연결을 위해 프로젝션 결과를 저장한다.
         res_spatial = x_proj
         
@@ -271,8 +279,7 @@ class ST_Transformer_Block(nn.Module):
         # >> (N*T, J, C) -> (N, T, J, C)
         x_spatial_out = x_spatial_out_NT.view(N, T, J, C_out)
 
-        # >> 프로젝션 잔차를 더한다.
-        x_spatial_out = x_spatial_out + res_spatial
+
 
 
         
@@ -287,7 +294,7 @@ class ST_Transformer_Block(nn.Module):
 
 
         # >> (최종 결과, 다음 블록용 어텐션 맵) 반환
-        return x_temporal_out
+        return x_temporal_out + res
     
     
 
@@ -333,7 +340,8 @@ class SlowFast_Transformer(nn.Module):
                 ST_Transformer_Block(
                     in_features=fast_dims[i],
                     out_features=fast_dims[i+1],
-                    num_joints=num_joints
+                    num_joints=num_joints,
+                    pos_encoder=self.fast_pos_encoder
                 )
             )
 
@@ -354,7 +362,8 @@ class SlowFast_Transformer(nn.Module):
                 ST_Transformer_Block(
                     in_features=slow_dims[i],
                     out_features=slow_dims[i+1],
-                    num_joints=num_joints
+                    num_joints=num_joints,
+                    pos_encoder=self.slow_pos_encoder
                 )
             )
 
@@ -424,12 +433,10 @@ class SlowFast_Transformer(nn.Module):
         # --- 2. Fast 경로 처리 (PE 추가) ---
         x_fast = self.fast_input_projection(x_fast) # (N, T_fast, J, C_fast0)
         
-        # (N, T, J, C)에 2D PE를 직접 적용
-        x_fast = self.fast_pos_encoder(x_fast) # (N, T_fast, J, C_fast0)
+        
 
         x_slow = self.slow_input_projection(x_slow)
-        # (N, T, J, C)에 2D PE를 직접 적용
-        x_slow = self.slow_pos_encoder(x_slow) # (N, T_slow, J, C_slow0)
+        
         
 
         # len(self.fast_blocks)는 2 (i=0, i=1)

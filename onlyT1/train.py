@@ -19,8 +19,7 @@
 # >> Train: 위 명령어가 출력해준 python train.py ... 명령어를 복사하여 터미널에 붙여넣고 실행하기
 # 예시: python train.py --protocol xsub --scheduler ... --trial-number 5 --lr 0.000123 ...
 
-# >> 중단/재시작: 훈련 기간 중 Ctrl+c를 눌러서 중단해도, 위에서 입력한 python train.py ... 명령어를 다\
-시 실행하면 체크포인트를 불러와서 이어서 학습한다.
+# >> 중단/재시작: 훈련 기간 중 Ctrl+c를 눌러서 중단해도, 위에서 입력한 python train.py ... 명령어를 다시 실행하면 체크포인트를 불러와서 이어서 학습한다.
 
 # >> 종료: 훈련이 특정 epoch까지 모두 완료되면 터미널에서 최종 안내가 나온다.
 # To report this result to Optuna, run the following command:

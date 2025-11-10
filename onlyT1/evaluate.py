@@ -289,7 +289,14 @@ def evaluate_model(checkpoint_path, protocol, run_tsne):
             # --- t-SNE 데이터 수집 (Hook이 자동으로 수집) ---
             if run_tsne:
                 all_action_labels_list.append(action_labels.cpu())
-                all_domain_labels_list.append(subject_labels.cpu()) # subject_label 사용
+                if protocol == 'xview':
+                    # xview는 0(Train) 또는 1(Val)을 사용합니다.
+                    all_domain_labels_list.append(subject_labels.cpu())
+                else: # xsub
+                    # xsub 평가(val_loader)는 모두 검증용 피실험자(Target Domain)입니다.
+                    # 따라서 '1'로 채워진 텐서를 추가합니다.
+                    domain_labels = torch.ones_like(action_labels, dtype=torch.int)
+                    all_domain_labels_list.append(domain_labels.cpu())
 
             # --- 진행률 표시 ---
             avg_loss = total_loss / total_samples
