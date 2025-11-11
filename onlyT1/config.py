@@ -28,7 +28,7 @@ SPATIAL_KEEP_RATE = 0.7 # 공간적 어텐션에서 '중요 관절'로 유지할
 NUM_SUBJECTS = 40
 
 # >> 학습 하이퍼파라미터
-EPOCHS = 20               # 총 학습 에폭
+EPOCHS = 25               # 총 학습 에폭
 LEARNING_RATE = 0.0003   
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
 WARMUP_EPOCHS = 7         # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수 
