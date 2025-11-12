@@ -31,7 +31,7 @@
 # >> ASK: 다음 트라이얼을 위해 ASK 부터 반복한다.
 
 # >> 실시간으로 현황 보기
-# optuna-dashboard sqlite:///my_study1.db
+# optuna-dashboard sqlite:///my_study2.db
 
 
 

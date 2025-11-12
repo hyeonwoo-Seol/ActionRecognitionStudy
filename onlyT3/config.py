@@ -5,7 +5,7 @@ import torch
 
 # >> NTU RGB+D 60 데이터셋의 .np 파일들이 있는 디렉토리 경로
 # >> 이 경로에는 preprocess_ntu_data.py를 실행하고 생성된 .np 파일들이 있는 경로로 지정해야 한다.
-DATASET_PATH = '../nturgbd_processed_allNew/'
+DATASET_PATH = '../nturgbd_processed_allNew200/'
 
 # >> 학습된 모델 가중치(체크포인트)를 저장할 디렉토리
 SAVE_DIR = 'checkpoints/'
@@ -14,7 +14,7 @@ SAVE_DIR = 'checkpoints/'
 SEED = 42
 
 # >> 데이터 로더 설정
-MAX_FRAMES = 150  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
+MAX_FRAMES = 100  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
 BATCH_SIZE = 38   # 배치 크기
 NUM_WORKERS = 6   # 데이터를 불러올 때 사용할 CPU 프로세서 수 
 PIN_MEMORY = True # GPU 사용 시 데이터 전송 속도를 높이기 위한 설정

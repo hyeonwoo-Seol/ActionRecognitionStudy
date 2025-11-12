@@ -54,7 +54,7 @@ class NTURGBDDataset(Dataset):
 
         
         # >> 데이터 정규화에 사용할 평균과 표준편차 통계 파일('stats.npz')의 경로를 설정한다.
-        stats_path = os.path.join(os.path.dirname(data_path.rstrip('/')), 'stats_allNew.npz')
+        stats_path = os.path.join(os.path.dirname(data_path.rstrip('/')), 'stats_allNew200.npz')
         if os.path.exists(stats_path):
             # >> 통계 파일이 존재하면 불러오기.
             stats = np.load(stats_path)
