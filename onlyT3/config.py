@@ -15,7 +15,7 @@ SEED = 42
 
 # >> 데이터 로더 설정
 MAX_FRAMES = 100  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
-BATCH_SIZE = 38   # 배치 크기
+BATCH_SIZE = 75   # 배치 크기
 NUM_WORKERS = 6   # 데이터를 불러올 때 사용할 CPU 프로세서 수 
 PIN_MEMORY = True # GPU 사용 시 데이터 전송 속도를 높이기 위한 설정
 
@@ -28,7 +28,7 @@ SPATIAL_KEEP_RATE = 0.7 # 공간적 어텐션에서 '중요 관절'로 유지할
 NUM_SUBJECTS = 40
 
 # >> 학습 하이퍼파라미터
-EPOCHS = 25               # 총 학습 에폭
+EPOCHS = 35               # 총 학습 에폭
 LEARNING_RATE = 0.0003   
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
 WARMUP_EPOCHS = 7         # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수 

@@ -14,7 +14,7 @@
 # ## --------------------------------------------------------------------------
 
 # >> ASK: 새 Trail을 시작하고 싶을 때 터미널에서 실행하는 명령어
-# python manager.py --study-name my_study2 ask
+# python manager.py --study-name my_study3 ask
 
 # >> Train: 위 명령어가 출력해준 python train.py ... 명령어를 복사하여 터미널에 붙여넣고 실행하기
 # 예시: python train.py --protocol xsub --scheduler ... --trial-number 5 --lr 0.000123 ...
@@ -31,7 +31,7 @@
 # >> ASK: 다음 트라이얼을 위해 ASK 부터 반복한다.
 
 # >> 실시간으로 현황 보기
-# optuna-dashboard sqlite:///my_study2.db
+# optuna-dashboard sqlite:///my_study3.db
 
 
 
@@ -167,7 +167,7 @@ def plot_history(history, save_path):
 
     # >> 그래프 제목 및 범례
     fig.suptitle('Training and Validation History', fontsize=16)
-    fig.legend(loc='upper right', bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
+    fig.legend(loc='upper left', bbox_to_anchor=(0,1), bbox_transform=ax1.transAxes)
     
     # >> 완성된 그래프를 이미지로 저장한다.
     plt.savefig(save_path)
