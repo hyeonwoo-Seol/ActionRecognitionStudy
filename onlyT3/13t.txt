@@ -1,0 +1,11 @@
+python train.py \
+    --study-name my_study3 \
+    --protocol xsub \
+    --scheduler cosine_decay \
+    --trial-number 13 \
+    --lr 0.00027263112480836927 \
+    --dropout 0.4190914833424775 \
+    --alpha 0.2020241463976997 \
+    --prob 0.3056982309930408 \
+    --weight-decay 0.010826504875884324 \
+    --smoothing 0.10822675595024855
