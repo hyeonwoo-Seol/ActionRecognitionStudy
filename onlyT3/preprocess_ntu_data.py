@@ -539,22 +539,41 @@ def process_file_for_stats(filename):
     
     # >> 15차원 특징을 반환한다.
     features = _calculate_features(downsampled_coords)
+
+    features_flat = features.reshape(-1, features.shape[-1])
     
-    valid_frames = features.reshape(-1, features.shape[-1])
-    valid_frames = valid_frames[np.abs(valid_frames).sum(axis=1) > 1e-6]
+    valid_mask_rows = np.abs(features_flat).sum(axis=1) > 1e-6
+    valid_features = features_flat[valid_mask_rows] # (N_valid, 15)
     
-    if valid_frames.shape[0] > 0:
-        # >> 특징 배열 전체를 반환하는 대신,
-        # >> (개수, 합계, 제곱의 합)을 계산하여 반환합니다.
-        count = valid_frames.shape[0]
-        # >> (N, 15) -> (15,)
-        sum_val = np.sum(valid_frames, axis=0) 
-        # >> (N, 15) -> (15,)
-        sum_sq_val = np.sum(np.square(valid_frames), axis=0) 
-        
-        return (count, sum_val, sum_sq_val)
-    else:
+    if valid_features.shape[0] == 0:
         return None
+    
+    # 15개 채널 각각에 대해 통계용 (count, sum, sum_sq)를 계산
+    counts = np.zeros(config.NUM_COORDS)
+    sums = np.zeros(config.NUM_COORDS)
+    sum_sqs = np.zeros(config.NUM_COORDS)
+
+    # 방향(Dir) 채널 인덱스 (ntu_data_loader.py 참고)
+    dir_channels = [1, 2, 3]
+
+    for i in range(config.NUM_COORDS):
+        feature_column = valid_features[:, i] # (N_valid,)
+
+        active_values = None
+        if i in dir_channels:
+            # 방향 채널은 0도 유효한 값이므로 모두 사용
+            active_values = feature_column
+        else:
+            # 나머지 '크기' 채널은 패딩 0을 제외
+            active_values = feature_column[np.abs(feature_column) > 1e-6]
+
+        if active_values.shape[0] > 0:
+            counts[i] = active_values.shape[0]
+            sums[i] = np.sum(active_values)
+            sum_sqs[i] = np.sum(np.square(active_values))
+
+    # (스칼라, 1D, 1D) 대신 (1D, 1D, 1D) 배열을 반환
+    return (counts, sums, sum_sqs)
 
 
 
@@ -566,10 +585,10 @@ def process_file_for_stats(filename):
 # ## ------------------------------------------------------------------------------
 def calculate_and_save_stats():
     print("--- 1단계: 훈련 데이터셋 통계치 계산 시작 ---")
-    # >>all_features 리스트 대신 누적 변수를 초기화한다.
-    total_count = 0
-    total_sum = np.zeros(config.NUM_COORDS)    # (15,) 크기 0배열
-    total_sum_sq = np.zeros(config.NUM_COORDS) # (15,) 크기 0배열
+    # >> 누적 변수를 15차원 배열로 초기화
+    total_count = np.zeros(config.NUM_COORDS)    # (15,) 크기 0배열
+    total_sum = np.zeros(config.NUM_COORDS)      # (15,) 크기 0배열
+    total_sum_sq = np.zeros(config.NUM_COORDS)   # (15,) 크기 0배열
 
     
     filenames = os.listdir(SOURCE_DATA_PATH)
@@ -588,33 +607,26 @@ def calculate_and_save_stats():
         for result in tqdm(results_iterator, total=len(filenames), desc="[Calculating Stats]"):
             if result is not None:
                 # >> 튜플을 unpack한다.
-                count, sum_val, sum_sq_val = result
+                counts, sum_val, sum_sq_val = result
                 
-                # >> 값을 누적한다.
-                total_count += count
+                # >> 배열을 element-wise로 누적
+                total_count += counts
                 total_sum += sum_val
                 total_sum_sq += sum_sq_val
+
+    epsilon = 1e-8
 
     if total_count == 0:
         print("치명적 오류: 유효한 훈련 데이터를 찾을 수 없습니다. 통계 계산 실패.")
         mean = np.zeros(config.NUM_COORDS)
         std_raw = np.ones(config.NUM_COORDS)
     else:
-        # >> E[X] = 총합 / 개수
-        mean = total_sum / total_count
-        
-        # >> E[X^2] = 제곱의 총합 / 개수
-        mean_of_sq = total_sum_sq / total_count
-        
-        # >> Var(X) = E[X^2] - (E[X])^2 (분산)
+        mean = total_sum / (total_count + epsilon)
+        mean_of_sq = total_sum_sq / (total_count + epsilon)
         variance = mean_of_sq - np.square(mean)
-        
-        # >> StdDev(X) = sqrt(Var(X)) (표준편차)
-        # >> 부동소수점 오류로 인해 variance가 아주 작은 음수가 되는 것을 방지한다.
         std_raw = np.sqrt(np.maximum(variance, 0.0))
 
     # >> 표준편차가 0에 가까운 값을 clip한다.
-    epsilon = 1e-6
     std = np.clip(std_raw, a_min=epsilon, a_max=None)
 
     # >> 계산된 통계치를 .npz 파일로 저장한다.
