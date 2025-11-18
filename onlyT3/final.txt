@@ -1,0 +1,2 @@
+python train.py --study-name final_training --protocol xsub --trial-number 100 --lr 0.000465 \
+       --dropout 0.418 --alpha 0.200 --prob 0.332 --weight-decay 0.0153 --smoothing 0.1042

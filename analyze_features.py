@@ -12,9 +12,9 @@ from multiprocessing import Pool, cpu_count
 # ## --------------------------------------------------------------------------
 
 # .pt 파일이 저장된 경로
-DATASET_PATH = './nturgbd_processed_allNew/'
+DATASET_PATH = './nturgbd_processed_allNew200/'
 # .npz 통계 파일 경로 (preprocess_ntu_data.py와 동일해야 함)
-STATS_FILE = './stats_allNew.npz'
+STATS_FILE = './stats_allNew200.npz'
 # 훈련 데이터 필터링을 위한 리스트 (preprocess_ntu_data.py와 동일)
 TRAINING_SUBJECTS = [1, 2, 4, 5, 8, 9, 13, 14, 15, 16, 17, 18, 19, 25, 27, 28, 31, 34, 35, 38]
 NUM_COORDS = 15

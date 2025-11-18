@@ -1,4 +1,4 @@
-# 11-18
+# 11-18 (버그 수정: 척추 길이 정규화 로직 제거)
 # preprocess_ntu_data.py
 # ##--------------------------------------------------------------------------
 # x, y, z 스켈레톤 좌표를 15가지의 복합 특징(거리, 방향, 뼈 길이, 
@@ -11,7 +11,8 @@
 # ##----------------------------------------------------------------------------
 # 패딩 0으로 인한 가짜 피크 문제를 해결했다.
 # Outlier들이 전체 평균을 오른쪽으로 끌어당겨 평균 값이 데이터의 실제 중심을 대표하지 못한다.
-
+# [수정] 모든 거리 기반 특징(0, 8-14)에 np.log1p 변환 적용
+# [버그 수정] np.log1p를 적용한 특징에 대해 중복으로 척추 길이 정규화(나눗셈)를 하던 로직 제거
 
 
 import os
@@ -304,7 +305,7 @@ def _calculate_features(coords):
     displacement[1:] = coords[1:] - coords[:-1]
     
     # >> 거리 계산
-    # distance = np.linalg.norm(displacement, axis=-1, keepdims=True)
+    # [수정] np.log1p 적용 (Feature 0)
     distance = np.log1p(np.linalg.norm(displacement, axis=-1, keepdims=True))
     
     # >> 방향 계산
@@ -320,6 +321,8 @@ def _calculate_features(coords):
     # >> (T, 2, 25, 1) 크기의 0 벡터를 초기화한다.
     bone_length_features = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
 
+    # [중요] Feature 4 (Bone Length)는 로그 변환을 '안 했으므로'
+    # [유지] 척추 길이 정규화를 반드시 '유지'합니다.
     for parent, child in SKELETON_BONES:
         # >> 뼈 벡터 계산 (T, 2, 3)
         bone_vec = coords[:, :, child, :] - coords[:, :, parent, :]
@@ -358,7 +361,7 @@ def _calculate_features(coords):
         
 
     # >> 3. 몸통 기준 상대 각도 (2D)
-    # >> 3-1. 몸통 좌표계 기준 벡터 3개를 정의한다. (T, 2, 3)
+    # >> (T, 2, 3)
     torso_Y_vec = coords[:, :, 20, :] - coords[:, :, 0, :]  # Y축 (위쪽)
     torso_X_vec = coords[:, :, 4, :] - coords[:, :, 8, :]  # X축 (오른쪽)
     torso_Z_vec = np.cross(torso_X_vec, torso_Y_vec)       # Z축 (정면)
@@ -367,13 +370,13 @@ def _calculate_features(coords):
     torso_Y_norm = torso_Y_vec / (np.linalg.norm(torso_Y_vec, axis=-1, keepdims=True) + 1e-8)
     torso_Z_norm = torso_Z_vec / (np.linalg.norm(torso_Z_vec, axis=-1, keepdims=True) + 1e-8)
 
-    # >> 3-2. 4대 팔다리 벡터 정의 (T, 2, 3)
+    # >> (T, 2, 3)
     vec_ru_arm = coords[:, :, 5, :] - coords[:, :, 4, :]  # 오른팔 (어깨->팔꿈치)
     vec_lu_arm = coords[:, :, 9, :] - coords[:, :, 8, :]  # 왼팔
     vec_r_thigh = coords[:, :, 13, :] - coords[:, :, 12, :] # 오른허벅지
     vec_l_thigh = coords[:, :, 17, :] - coords[:, :, 16, :] # 왼허벅지
 
-    # >> 3-3. 각도 계산
+    # >> 각도 계산
     angle_ru_arm_Y = _calculate_angle_between_vectors(vec_ru_arm, torso_Y_norm) # (T, 2)
     angle_lu_arm_Y = _calculate_angle_between_vectors(vec_lu_arm, torso_Y_norm)
     angle_r_thigh_Y = _calculate_angle_between_vectors(vec_r_thigh, torso_Y_norm)
@@ -384,14 +387,14 @@ def _calculate_features(coords):
     angle_r_thigh_Z = _calculate_angle_between_vectors(vec_r_thigh, torso_Z_norm)
     angle_l_thigh_Z = _calculate_angle_between_vectors(vec_l_thigh, torso_Z_norm)
 
-    # >> 3-4. 특징 채널에 할당 (2개의 새로운 채널 생성)
+    # >> (2개의 새로운 채널 생성)
     rel_angle_Y_feat = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
     rel_angle_Z_feat = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
     
-    rel_angle_Y_feat[:, :, 5, 0] = angle_ru_arm_Y   # 오른 팔꿈치
-    rel_angle_Y_feat[:, :, 9, 0] = angle_lu_arm_Y   # 왼 팔꿈치
-    rel_angle_Y_feat[:, :, 13, 0] = angle_r_thigh_Y # 오른 무릎
-    rel_angle_Y_feat[:, :, 17, 0] = angle_l_thigh_Y # 왼 무릎
+    rel_angle_Y_feat[:, :, 5, 0] = angle_ru_arm_Y
+    rel_angle_Y_feat[:, :, 9, 0] = angle_lu_arm_Y
+    rel_angle_Y_feat[:, :, 13, 0] = angle_r_thigh_Y
+    rel_angle_Y_feat[:, :, 17, 0] = angle_l_thigh_Y
     
     rel_angle_Z_feat[:, :, 5, 0] = angle_ru_arm_Z
     rel_angle_Z_feat[:, :, 9, 0] = angle_lu_arm_Z
@@ -406,113 +409,103 @@ def _calculate_features(coords):
     dist_lh_lf_vec = coords[:, :, 11, :] - coords[:, :, 19, :] # 왼손 - 왼발
 
     # >> (T, 2)
+    # [수정] np.log1p 적용 (Feature 8, 9)
     dist_hands = np.log1p(np.linalg.norm(dist_hands_vec, axis=-1))
     dist_feet = np.log1p(np.linalg.norm(dist_feet_vec, axis=-1))
     dist_rh_rf = np.log1p(np.linalg.norm(dist_rh_rf_vec, axis=-1))
     dist_lh_lf = np.log1p(np.linalg.norm(dist_lh_lf_vec, axis=-1))
-    
-    # >> 4-2. 척추 길이로 정규화
-    # 0으로 나누는 것을 방지하는 '안전한' 척추 길이로 나눈다.
-    norm_dist_hands = dist_hands / safe_torso_lengths_squeezed
-    norm_dist_feet = dist_feet / safe_torso_lengths_squeezed
-    norm_dist_rh_rf = dist_rh_rf / safe_torso_lengths_squeezed
-    norm_dist_lh_lf = dist_lh_lf / safe_torso_lengths_squeezed
+
+    # >> 4-2. [버그 수정] 척추 길이 정규화 로직을 '삭제'합니다. (이미 로그 변환됨)
+    # norm_dist_hands = dist_hands / safe_torso_lengths_squeezed (X)
 
     # >> 4-3. 특징 채널에 할당 (2개의 새로운 채널 생성)
     inter_dist_feat_1 = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
     inter_dist_feat_2 = np.zeros((T, 2, BASE_NUM_JOINTS, 1))
 
     # >> (T, 2) -> (T, 2, 1)로 브로드캐스팅 준비
-    norm_dist_hands = norm_dist_hands[..., np.newaxis]
-    norm_dist_feet = norm_dist_feet[..., np.newaxis]
-    norm_dist_rh_rf = norm_dist_rh_rf[..., np.newaxis]
-    norm_dist_lh_lf = norm_dist_lh_lf[..., np.newaxis]
+    # [수정] 정규화 안 된 원본 로그값(dist_hands 등)을 사용합니다.
+    norm_dist_hands = dist_hands[..., np.newaxis]
+    norm_dist_feet = dist_feet[..., np.newaxis]
+    norm_dist_rh_rf = dist_rh_rf[..., np.newaxis]
+    norm_dist_lh_lf = dist_lh_lf[..., np.newaxis]
 
-    # >> 비대칭 할당 -> 대칭 할당
-    inter_dist_feat_1[:, :, [7, 11], 0] = norm_dist_hands   # 오른손(7)과 왼손(11) 모두에 할당
-    inter_dist_feat_1[:, :, [15, 19], 0] = norm_dist_feet  # 오른발(15)과 왼발(19) 모두에 할당
-    inter_dist_feat_2[:, :, [7, 15], 0] = norm_dist_rh_rf  # 오른손(7)과 오른발(15) 모두에 할당
-    inter_dist_feat_2[:, :, [11, 19], 0] = norm_dist_lh_lf # 왼손(11)과 왼발(19) 모두에 할당
+    # >> 대칭 할당
+    inter_dist_feat_1[:, :, [7, 11], 0] = norm_dist_hands
+    inter_dist_feat_1[:, :, [15, 19], 0] = norm_dist_feet
+    inter_dist_feat_2[:, :, [7, 15], 0] = norm_dist_rh_rf
+    inter_dist_feat_2[:, :, [11, 19], 0] = norm_dist_lh_lf
 
 
     
     # >> 5. 두 명의 중심 거리 (1D)
-    # >> 5-1. P0와 P1의 척추 하단(0번 관절) 좌표
-    # coords shape은 (T, 2, 25, 3) 입니다
     p0_center = coords[:, 0, 0, :] # (T, 3)
     p1_center = coords[:, 1, 0, :] # (T, 3)
 
-    # >> 5-2. 두 중심점 간의 거리 계산
+    # >> 5-2. 거리 계산
     center_distance_vec = p0_center - p1_center
 
-    # np.log1p 적용
-    center_distance = np.log1p(np.linalg.norm(center_distance_vec, axis=-1))
+    # [수정] np.log1p 적용 (Feature 10)
+    center_distance = np.log1p(np.linalg.norm(center_distance_vec, axis=-1)) # (T,)
 
-    # >> 5-3. 각자의 '안전한' 척추 길이로 정규화
-    # safe_torso_lengths_squeezed는 (T, 2) 입니다
-    safe_torso_p0 = safe_torso_lengths_squeezed[:, 0] # (T,)
-    safe_torso_p1 = safe_torso_lengths_squeezed[:, 1] # (T,)
+    # >> 5-3. [버그 수정] 척추 길이 정규화 로직을 '삭제'합니다.
+    # norm_center_dist_p0 = (center_distance / safe_torso_p0)[..., np.newaxis] (X)
+
+    # >> 5-4. 특징을 모든 관절(25개)에 브로드캐스팅
+    # [수정] 정규화 안 된 원본 로그값(center_distance)을 사용합니다.
+    center_distance_expanded = center_distance[..., np.newaxis] # (T,) -> (T, 1)
     
-    # 0으로 나누는 것을 방지 (safe_torso가 1e-8을 더했으므로 이미 안전함)
-    # (T,) -> (T, 1)
-    norm_center_dist_p0 = (center_distance / safe_torso_p0)[..., np.newaxis] 
-    norm_center_dist_p1 = (center_distance / safe_torso_p1)[..., np.newaxis]
-
-    # >> 5-4. 이 특징을 모든 관절(25개)에 브로드캐스팅
     # (T, 1) -> (T, 1, 1) -> (T, 25, 1)
-    norm_center_dist_p0_broadcast = np.broadcast_to(norm_center_dist_p0[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
-    norm_center_dist_p1_broadcast = np.broadcast_to(norm_center_dist_p1[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
+    norm_center_dist_p0_broadcast = np.broadcast_to(center_distance_expanded[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
+    norm_center_dist_p1_broadcast = np.broadcast_to(center_distance_expanded[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
 
-    # >> 5-5. P0용 특징 배열과 P1용 특징 배열을 스택 (T, 2, 25, 1)
+    # >> 5-5. P0/P1 스택 (T, 2, 25, 1)
     interaction_feat_dist = np.stack([norm_center_dist_p0_broadcast, norm_center_dist_p1_broadcast], axis=1)
 
 
     # >> 6. P0-P1 손/발 상호작용 거리 (4D)
-    # >> (T,) 형태의 거리 계산
-    dist_rh_rh = np.log1p(np.linalg.norm(coords[:, 0, 7, :] - coords[:, 1, 7, :], axis=-1)) # P0 오른손 - P1 오른손
-    dist_lh_lh = np.log1p(np.linalg.norm(coords[:, 0, 11, :] - coords[:, 1, 11, :], axis=-1)) # P0 왼손 - P1 왼손
-    dist_rf_rf = np.log1p(np.linalg.norm(coords[:, 0, 15, :] - coords[:, 1, 15, :], axis=-1)) # P0 오른발 - P1 오른발
-    dist_lf_lf = np.log1p(np.linalg.norm(coords[:, 0, 19, :] - coords[:, 1, 19, :], axis=-1)) # P0 왼발 - P1 왼발
+    # [수정] np.log1p 적용 (Feature 11-14)
+    dist_rh_rh = np.log1p(np.linalg.norm(coords[:, 0, 7, :] - coords[:, 1, 7, :], axis=-1))
+    dist_lh_lh = np.log1p(np.linalg.norm(coords[:, 0, 11, :] - coords[:, 1, 11, :], axis=-1))
+    dist_rf_rf = np.log1p(np.linalg.norm(coords[:, 0, 15, :] - coords[:, 1, 15, :], axis=-1))
+    dist_lf_lf = np.log1p(np.linalg.norm(coords[:, 0, 19, :] - coords[:, 1, 19, :], axis=-1))
 
-    # >> (T,)
-    safe_torso_p0 = safe_torso_lengths_squeezed[:, 0] 
-    safe_torso_p1 = safe_torso_lengths_squeezed[:, 1]
-
-    # >> (T, 2, 25, 1) 특징을 생성하는 내부 헬퍼 함수를 정의한다.
-    def _create_inter_feat(dist_val, torso_p0, torso_p1):
-        norm_dist_p0 = (dist_val / torso_p0)[..., np.newaxis]
-        norm_dist_p1 = (dist_val / torso_p1)[..., np.newaxis]
-        norm_dist_p0_b = np.broadcast_to(norm_dist_p0[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
-        norm_dist_p1_b = np.broadcast_to(norm_dist_p1[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
+    # >> [버그 수정] 척추 길이 정규화 로직을 '삭제'합니다.
+    
+    # [버그 수정] 헬퍼 함수에서 척추 길이 인자 및 나눗셈 로직 '삭제'
+    def _create_inter_feat(dist_val):
+        # [수정] 정규화 안 된 원본 로그값(dist_val)을 사용합니다.
+        dist_val_expanded = dist_val[..., np.newaxis] # (T,) -> (T, 1)
+        
+        # (T, 1) -> (T, 1, 1) -> (T, 25, 1)
+        norm_dist_p0_b = np.broadcast_to(dist_val_expanded[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
+        norm_dist_p1_b = np.broadcast_to(dist_val_expanded[:, np.newaxis, :], (T, BASE_NUM_JOINTS, 1))
         return np.stack([norm_dist_p0_b, norm_dist_p1_b], axis=1)
 
     # >> 4개의 새로운 특징 채널 생성
-    inter_feat_rh_rh = _create_inter_feat(dist_rh_rh, safe_torso_p0, safe_torso_p1)
-    inter_feat_lh_lh = _create_inter_feat(dist_lh_lh, safe_torso_p0, safe_torso_p1)
-    inter_feat_rf_rf = _create_inter_feat(dist_rf_rf, safe_torso_p0, safe_torso_p1)
-    inter_feat_lf_lf = _create_inter_feat(dist_lf_lf, safe_torso_p0, safe_torso_p1)
+    inter_feat_rh_rh = _create_inter_feat(dist_rh_rh)
+    inter_feat_lh_lh = _create_inter_feat(dist_lh_lh)
+    inter_feat_rf_rf = _create_inter_feat(dist_rf_rf)
+    inter_feat_lf_lf = _create_inter_feat(dist_lf_lf)
     
-    # >> 7. 모든 특징 결합 (11D + 4D = 15D)
+    # >> 7. 모든 특징 결합 (15D)
     combined_features_per_person = np.concatenate(
         (dynamic_features,      # 4D
-         bone_length_features,  # 1D
+         bone_length_features,  # 1D (척추 길이 정규화 O)
          joint_angle_features,  # 1D
          rel_angle_Y_feat,      # 1D
          rel_angle_Z_feat,      # 1D
-         inter_dist_feat_1,     # 1D
-         inter_dist_feat_2,     # 1D
-         interaction_feat_dist, # 1D
-         inter_feat_rh_rh,      # 1D
-         inter_feat_lh_lh,      # 1D
-         inter_feat_rf_rf,      # 1D
-         inter_feat_lf_lf       # 1D
+         inter_dist_feat_1,     # 1D (척추 길이 정규화 X, 로그 O)
+         inter_dist_feat_2,     # 1D (척추 길이 정규화 X, 로그 O)
+         interaction_feat_dist, # 1D (척추 길이 정규화 X, 로그 O)
+         inter_feat_rh_rh,      # 1D (척추 길이 정규화 X, 로그 O)
+         inter_feat_lh_lh,      # 1D (척추 길이 정규화 X, 로그 O)
+         inter_feat_rf_rf,      # 1D (척추 길이 정규화 X, 로그 O)
+         inter_feat_lf_lf       # 1D (척추 길이 정규화 X, 로그 O)
         ), 
         axis=-1
     ) # shape: (T, 2, 25, 15)
 
     # >> 8. 최종 마스킹
-    # 유효하지 않은(몸통 길이 < 1cm) 프레임/사람의 모든 특징을 0으로 설정한다.
-    # valid_mask shape은 (T, 2, 1, 1)이며, 브로드캐스팅을 통해 (T, 2, 25, 15)에 적용된다.
     combined_features_per_person = combined_features_per_person * valid_mask
 
     
