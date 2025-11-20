@@ -1,0 +1,17 @@
+trial 100
+python train.py --study-name final_training --protocol xsub --trial-number 100 --lr 0.000465 \
+       --dropout 0.418 --alpha 0.200 --prob 0.332 --weight-decay 0.0153 --smoothing 0.1042
+
+trial 101
+python train.py --study-name final_training --protocol xsub --trial-number 101 --lr 0.000465 \
+       --dropout 0.418 --alpha 0.500 --prob 0.332 --weight-decay 0.0553 --smoothing 0.1042
+
+trial 102
+python train.py --study-name final_training --protocol xsub --trial-number 102 --lr 0.000465 \
+       --dropout 0.418 --alpha 0.990 --prob 0.332 --weight-decay 0.0553 --smoothing 0.1042
+->0.8102
+
+trial 103
+python train.py --study-name final_training --protocol xsub --trial-number 103 --lr 0.000465 \
+       --dropout 0.718 --alpha 0.990 --prob 0.332 --weight-decay 0.0553 --smoothing 0.1042
+

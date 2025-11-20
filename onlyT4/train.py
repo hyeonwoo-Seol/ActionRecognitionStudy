@@ -14,7 +14,7 @@
 # ## --------------------------------------------------------------------------
 
 # >> ASK: 새 Trail을 시작하고 싶을 때 터미널에서 실행하는 명령어
-# python manager.py --study-name my_study3 ask
+# python manager.py --study-name my_study5 ask
 
 # >> Train: 위 명령어가 출력해준 python train.py ... 명령어를 복사하여 터미널에 붙여넣고 실행하기
 # 예시: python train.py --protocol xsub --scheduler ... --trial-number 5 --lr 0.000123 ...
@@ -31,7 +31,7 @@
 # >> ASK: 다음 트라이얼을 위해 ASK 부터 반복한다.
 
 # >> 실시간으로 현황 보기
-# optuna-dashboard sqlite:///my_study3.db
+# optuna-dashboard sqlite:///my_study5.db
 
 
 
