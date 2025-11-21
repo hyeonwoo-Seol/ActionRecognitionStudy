@@ -362,7 +362,7 @@ class SlowFast_Transformer(nn.Module):
             slow_pe = SpatioTemporalPositionalEncoding(
                 d_model=slow_dims[i+1],
                 num_joints=num_joints,
-                max_frames=(config.MAX_FRAMES // 4)
+                max_frames=(config.MAX_FRAMES // 2)
             )
             
             self.slow_blocks.append(
@@ -387,7 +387,7 @@ class SlowFast_Transformer(nn.Module):
                     in_channels=fast_dims[i],    # Fast 경로의 [i]번째 채널 수
                     out_channels=slow_dims[i],   # Slow 경로의 [i]번째 채널 수
                     kernel_size=(5, 1),      # (Temporal_Kernel=5, Spatial_Kernel=1)
-                    stride=(4, 1),           
+                    stride=(2, 1),           
                     padding=(2, 0)           # (Temporal_Padding=2, Spatial_Padding=0)
                 )
             )

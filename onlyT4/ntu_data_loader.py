@@ -228,7 +228,7 @@ class NTURGBDDataset(Dataset):
         data_fast = features.permute(2, 0, 1)
 
         # >> 4.2 Slow Fast
-        data_slow = data_fast[:, ::4, :]
+        data_slow = data_fast[:, ::2, :]
 
         # >> 4.3 Return
         return data_fast, data_slow, action_label, subject_label
