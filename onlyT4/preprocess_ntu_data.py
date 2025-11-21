@@ -536,10 +536,10 @@ def process_file_for_stats(filename):
     if coords.shape[0] == 0:
         return None  # 파일 내용이 비어있으면 None 반환
 
-    # downsampled_coords = coords[::2, :, :, :]
+    downsampled_coords = coords[::2, :, :, :]
     
     # >> 15차원 특징을 반환한다.
-    features = _calculate_features(coords)
+    features = _calculate_features(downsampled_coords)
 
     features_flat = features.reshape(-1, features.shape[-1])
     
@@ -656,9 +656,9 @@ def process_and_save_file(filename):
         first_frame_raw = coords[0, :, :, :]
         first_frame_coords = np.concatenate((first_frame_raw[0], first_frame_raw[1]), axis=0)
         
-        # downsampled_coords = coords[::2, :, :]
+        downsampled_coords = coords[::2, :, :]
         # >> 15차원 특징 계산
-        raw_features = _calculate_features(coords) 
+        raw_features = _calculate_features(downsampled_coords) 
         
         num_frames = raw_features.shape[0]
         if num_frames < MAX_FRAMES:
