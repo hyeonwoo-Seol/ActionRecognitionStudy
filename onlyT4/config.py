@@ -14,7 +14,7 @@ SAVE_DIR = 'checkpoints/'
 SEED = 42
 
 # >> 데이터 로더 설정
-MAX_FRAMES = 200  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
+MAX_FRAMES = 100  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
 BATCH_SIZE = 24   # 배치 크기
 NUM_WORKERS = 6   # 데이터를 불러올 때 사용할 CPU 프로세서 수 
 PIN_MEMORY = True # GPU 사용 시 데이터 전송 속도를 높이기 위한 설정
@@ -42,5 +42,5 @@ T_MULT = 2   # 2로 설정된 경우, 15에폭 다음에 학습률 초기화는 
 ADVERSARIAL_ALPHA = 0.2    # 적대적 학습의 강도
 
 # >> DIMS 사용법은, [입력 크기, 출력 크기]이다. 만약 4층을 쌓으려면 [64, 128, 128, 256, 256] 하면 된다.
-FAST_DIMS = [64, 128, 256]       # Fast: 가볍게
+FAST_DIMS = [64, 64, 64]       # Fast: 가볍게
 SLOW_DIMS = [64, 128, 256]    # Slow: 무겁게, 이전 값: [128, 128, 256]
