@@ -77,26 +77,43 @@ def objective(trial):
             stderr=subprocess.STDOUT, # 에러도 표준출력으로 합침
             text=True, 
             encoding='utf-8',
-            bufsize=1 # 라인 버퍼링
+            bufsize=0 # 라인 버퍼링
         )
+
+        line_buffer = ""
         
-        # 한 줄씩 읽어서 화면에 출력하고, 정확도를 파싱합니다.
-        for line in process.stdout:
-            print(line, end='') # 터미널에 즉시 출력
+        while True:
+            # 한 글자(char)를 읽습니다.
+            char = process.stdout.read(1)
             
-            # 정확도 파싱
-            match = re.search(r"Best Validation Accuracy: (\d+\.\d+)", line)
-            if match:
-                best_accuracy = float(match.group(1))
+            # 읽을 게 없고 프로세스가 끝났으면 루프 종료
+            if not char and process.poll() is not None:
+                break
+            
+            if char:
+                # 읽은 글자를 즉시 터미널에 쏩니다 (줄바꿈 대기 X)
+                sys.stdout.write(char)
+                sys.stdout.flush() # 버퍼 비우기
+                
+                # 정확도 파싱을 위해 글자를 모읍니다.
+                line_buffer += char
+                
+                # 줄바꿈이 일어나면, 모아둔 줄에서 정확도를 찾습니다.
+                if char == '\n':
+                    match = re.search(r"Best Validation Accuracy: (\d+\.\d+)", line_buffer)
+                    if match:
+                        best_accuracy = float(match.group(1))
+                    # 줄이 바뀌었으니 버퍼 초기화
+                    line_buffer = ""
         
-        # 프로세스가 끝날 때까지 대기
+        # 프로세스 종료 대기
         process.wait()
 
         if process.returncode != 0:
             print(f"[Error] Trial {trial.number} failed with return code {process.returncode}")
             return 0.0
 
-        print(f"[Trial {trial.number}] Finished. Captured Accuracy: {best_accuracy:.4f}")
+        print(f"\n[Trial {trial.number}] Finished. Captured Accuracy: {best_accuracy:.4f}")
         return best_accuracy
 
     except Exception as e:
