@@ -64,10 +64,10 @@ def main():
         # 이 정의는 train.py의 suggest_... 와 동일해야 합니다.
         trial = study.ask(
             {
-                "LEARNING_RATE": optuna.distributions.FloatDistribution(4e-4, 8e-4, log=True),
+                "LEARNING_RATE": optuna.distributions.FloatDistribution(4e-4, 6e-4, log=True),
                 "DROPOUT": optuna.distributions.FloatDistribution(0.2, 0.5),
                 "ADVERSARIAL_ALPHA": optuna.distributions.FloatDistribution(0.05, 0.35),
-                "PROB": optuna.distributions.FloatDistribution(0.3, 0.7),
+                "PROB": optuna.distributions.FloatDistribution(0.5, 0.8),
                 "ADAMW_WEIGHT_DECAY": optuna.distributions.FloatDistribution(0.001, 0.1, log=True),
                 "LABEL_SMOOTHING": optuna.distributions.FloatDistribution(0.0, 0.2)
             }
