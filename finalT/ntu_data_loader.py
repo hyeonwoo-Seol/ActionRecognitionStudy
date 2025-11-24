@@ -76,7 +76,7 @@ class NTURGBDDataset(Dataset):
     # >> 데이터 디렉토리를 스캔해서 'train', 'val' 모드에 맞는 파일 경로를 self.sampels 리스트에 저장한다.
     def _load_data_path(self):
         print(f"Scanning {self.split} data paths from '{self.data_path}'...")
-        filenames = os.listdir(self.data_path)
+        filenames = sorted(os.listdir(self.data_path))
         
         for filename in tqdm(filenames, desc=f"[{self.split.upper()}] Scanning file paths"):
             # >> .pt 확장자를 가진 파일만 처리한다.

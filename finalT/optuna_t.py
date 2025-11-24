@@ -8,19 +8,19 @@ import pty  # [핵심] 가짜 터미널 라이브러리 추가
 # ---------------------------------------------------------
 # [설정] 탐색할 횟수와 스터디 이름
 # ---------------------------------------------------------
-N_TRIALS = 30          
-STUDY_NAME = "finalStudy1"  
+N_TRIALS = 60
+STUDY_NAME = "final1"  
 STORAGE_URL = f"sqlite:///{STUDY_NAME}.db" 
 
 def objective(trial):
     # -----------------------------------------------------
     # 1. 하이퍼파라미터 정의
     # -----------------------------------------------------
-    lr = trial.suggest_float("lr", 4e-4, 9e-4, log=True)
+    lr = trial.suggest_float("lr", 4e-4, 6e-4, log=True)
     dropout = trial.suggest_float("dropout", 0.2, 0.6)
     alpha = trial.suggest_float("alpha", 0.0, 1.0)
-    prob = trial.suggest_float("prob", 0.1, 0.5)
-    weight_decay = trial.suggest_float("weight_decay", 1e-4, 1e-1, log=True)
+    prob = trial.suggest_float("prob", 0.5, 0.8)
+    weight_decay = trial.suggest_float("weight_decay", 1e-3, 1e-1, log=True)
     smoothing = trial.suggest_float("smoothing", 0.05, 0.2)
 
     print(f"\n[Trial {trial.number}] Starting training...")

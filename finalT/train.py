@@ -14,7 +14,7 @@
 # ## --------------------------------------------------------------------------
 
 # >> ASK: 새 Trail을 시작하고 싶을 때 터미널에서 실행하는 명령어
-# python manager.py --study-name my_study5 ask
+# python manager.py --study-name final1 ask
 
 # >> Train: 위 명령어가 출력해준 python train.py ... 명령어를 복사하여 터미널에 붙여넣고 실행하기
 # 예시: python train.py --protocol xsub --scheduler ... --trial-number 5 --lr 0.000123 ...
@@ -31,7 +31,7 @@
 # >> ASK: 다음 트라이얼을 위해 ASK 부터 반복한다.
 
 # >> 실시간으로 현황 보기
-# optuna-dashboard sqlite:///my_study5.db
+# optuna-dashboard sqlite:///final1.db
 
 
 
@@ -77,6 +77,11 @@ MAX_EPOCHS_PER_TRIAL = config.EPOCHS
 
 
 
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 def get_scheduler(optimizer, scheduler_name, total_epochs, warmup_epochs):
@@ -354,9 +359,14 @@ def run_trial(args):
             data_path = config.DATASET_PATH, split = 'train',
             max_frames = config.MAX_FRAMES, protocol = args.protocol
         )
+        
+        g = torch.Generator()
+        g.manual_seed(config.SEED)
+        
         train_loader = DataLoader(
             train_dataset, batch_size = config.BATCH_SIZE, shuffle = True,
-            num_workers = config.NUM_WORKERS, pin_memory = config.PIN_MEMORY
+            num_workers = config.NUM_WORKERS, pin_memory = config.PIN_MEMORY,
+            worker_init_fn=seed_worker, generator=g
         )
         val_dataset = NTURGBDDataset(
             data_path = config.DATASET_PATH, split = 'val',
@@ -364,7 +374,8 @@ def run_trial(args):
         )
         val_loader = DataLoader(
             val_dataset, batch_size = config.BATCH_SIZE, shuffle = False,
-            num_workers = config.NUM_WORKERS, pin_memory = config.PIN_MEMORY
+            num_workers = config.NUM_WORKERS, pin_memory = config.PIN_MEMORY,
+            worker_init_fn=seed_worker, generator=g
         )
 
         # (덮어쓴 config 값으로 모델 생성)
