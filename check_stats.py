@@ -4,7 +4,7 @@ import os
 import time
 
 # config.py, ntu_data_loader.py 등과 동일한 경로를 사용해야 합니다.
-STATS_FILE = './stats_allNew200.npz' 
+STATS_FILE = './stats_12D_Norm.npz' 
 
 if not os.path.exists(STATS_FILE):
     print(f"오류: '{STATS_FILE}' 파일을 찾을 수 없습니다.")
