@@ -183,3 +183,163 @@ Best Validation Accuracy: 0.8554
  >> GRL Target: Subject Classification (40 classes)
 Using 'cosine_decay' scheduler.
 
+Epoch [1/40] | Time: 265.6s | LR: 0.000005 | Alpha: 0.0000
+ >> [ACT] Train: 0.0223 | Val: 0.0503
+ >> [AUX] Train: 0.0572 (GRL Target)
+
+Epoch [2/40] | Time: 263.7s | LR: 0.000069 | Alpha: 0.0000
+ >> [ACT] Train: 0.1357 | Val: 0.3044
+ >> [AUX] Train: 0.1421 (GRL Target)
+
+Epoch [3/40] | Time: 265.6s | LR: 0.000134 | Alpha: 0.0000
+ >> [ACT] Train: 0.3081 | Val: 0.4527
+ >> [AUX] Train: 0.1591 (GRL Target)
+
+Epoch [4/40] | Time: 265.4s | LR: 0.000198 | Alpha: 0.0000
+ >> [ACT] Train: 0.4454 | Val: 0.5775
+ >> [AUX] Train: 0.1713 (GRL Target)
+
+Epoch [5/40] | Time: 264.6s | LR: 0.000263 | Alpha: 0.0000
+ >> [ACT] Train: 0.5444 | Val: 0.6131
+ >> [AUX] Train: 0.1846 (GRL Target)
+
+Epoch [6/40] | Time: 264.3s | LR: 0.000327 | Alpha: 0.0000
+ >> [ACT] Train: 0.6010 | Val: 0.6565
+ >> [AUX] Train: 0.1957 (GRL Target)
+
+Epoch [7/40] | Time: 264.4s | LR: 0.000392 | Alpha: 0.0000
+ >> [ACT] Train: 0.6438 | Val: 0.7005
+ >> [AUX] Train: 0.2047 (GRL Target)
+
+Epoch [8/40] | Time: 264.2s | LR: 0.000456 | Alpha: 0.0000
+ >> [ACT] Train: 0.6740 | Val: 0.7157
+ >> [AUX] Train: 0.2183 (GRL Target)
+
+Epoch [9/40] | Time: 264.3s | LR: 0.000455 | Alpha: 0.0061
+ >> [ACT] Train: 0.7019 | Val: 0.7385
+ >> [AUX] Train: 0.2250 (GRL Target)
+
+Epoch [10/40] | Time: 264.4s | LR: 0.000452 | Alpha: 0.0121
+ >> [ACT] Train: 0.7247 | Val: 0.7519
+ >> [AUX] Train: 0.2328 (GRL Target)
+
+Epoch [11/40] | Time: 264.1s | LR: 0.000447 | Alpha: 0.0182
+ >> [ACT] Train: 0.7433 | Val: 0.7603
+ >> [AUX] Train: 0.2373 (GRL Target)
+
+Epoch [12/40] | Time: 264.5s | LR: 0.000440 | Alpha: 0.0242
+ >> [ACT] Train: 0.7589 | Val: 0.7681
+ >> [AUX] Train: 0.2362 (GRL Target)
+
+Epoch [13/40] | Time: 264.3s | LR: 0.000431 | Alpha: 0.0303
+ >> [ACT] Train: 0.7738 | Val: 0.7815
+ >> [AUX] Train: 0.2387 (GRL Target)
+
+Epoch [14/40] | Time: 264.5s | LR: 0.000420 | Alpha: 0.0364
+ >> [ACT] Train: 0.7872 | Val: 0.7842
+ >> [AUX] Train: 0.2348 (GRL Target)
+
+Epoch [15/40] | Time: 264.2s | LR: 0.000407 | Alpha: 0.0424
+ >> [ACT] Train: 0.7932 | Val: 0.7856
+ >> [AUX] Train: 0.2303 (GRL Target)
+
+Epoch [16/40] | Time: 264.5s | LR: 0.000393 | Alpha: 0.0485
+ >> [ACT] Train: 0.8052 | Val: 0.7999
+ >> [AUX] Train: 0.2314 (GRL Target)
+
+Epoch [17/40] | Time: 264.4s | LR: 0.000377 | Alpha: 0.0545
+ >> [ACT] Train: 0.8141 | Val: 0.7993
+ >> [AUX] Train: 0.2264 (GRL Target)
+
+Epoch [18/40] | Time: 264.4s | LR: 0.000360 | Alpha: 0.0606
+ >> [ACT] Train: 0.8199 | Val: 0.8079
+ >> [AUX] Train: 0.2295 (GRL Target)
+
+Epoch [19/40] | Time: 264.3s | LR: 0.000342 | Alpha: 0.0667
+ >> [ACT] Train: 0.8285 | Val: 0.8046
+ >> [AUX] Train: 0.2249 (GRL Target)
+
+Epoch [20/40] | Time: 264.2s | LR: 0.000323 | Alpha: 0.0727
+ >> [ACT] Train: 0.8350 | Val: 0.8127
+ >> [AUX] Train: 0.2267 (GRL Target)
+
+Epoch [21/40] | Time: 263.3s | LR: 0.000303 | Alpha: 0.0788
+ >> [ACT] Train: 0.8428 | Val: 0.8136
+ >> [AUX] Train: 0.2240 (GRL Target)
+
+Epoch [22/40] | Time: 264.3s | LR: 0.000282 | Alpha: 0.0848
+ >> [ACT] Train: 0.8490 | Val: 0.8212
+ >> [AUX] Train: 0.2206 (GRL Target)
+
+Epoch [23/40] | Time: 264.5s | LR: 0.000261 | Alpha: 0.0909
+ >> [ACT] Train: 0.8566 | Val: 0.8142
+ >> [AUX] Train: 0.2181 (GRL Target)
+
+Epoch [24/40] | Time: 264.1s | LR: 0.000239 | Alpha: 0.0970
+ >> [ACT] Train: 0.8612 | Val: 0.8242
+ >> [AUX] Train: 0.2164 (GRL Target)
+
+Epoch [25/40] | Time: 264.5s | LR: 0.000218 | Alpha: 0.1030
+ >> [ACT] Train: 0.8689 | Val: 0.8333
+ >> [AUX] Train: 0.2173 (GRL Target)
+
+Epoch [26/40] | Time: 264.5s | LR: 0.000196 | Alpha: 0.1091
+ >> [ACT] Train: 0.8733 | Val: 0.8300
+ >> [AUX] Train: 0.2174 (GRL Target)
+
+Epoch [27/40] | Time: 263.8s | LR: 0.000175 | Alpha: 0.1152
+ >> [ACT] Train: 0.8775 | Val: 0.8303
+ >> [AUX] Train: 0.2154 (GRL Target)
+
+Epoch [28/40] | Time: 263.9s | LR: 0.000154 | Alpha: 0.1212
+ >> [ACT] Train: 0.8820 | Val: 0.8354
+ >> [AUX] Train: 0.2115 (GRL Target)
+
+Epoch [29/40] | Time: 263.8s | LR: 0.000134 | Alpha: 0.1273
+ >> [ACT] Train: 0.8882 | Val: 0.8354
+ >> [AUX] Train: 0.2076 (GRL Target)
+
+Epoch [30/40] | Time: 264.8s | LR: 0.000115 | Alpha: 0.1333
+ >> [ACT] Train: 0.8926 | Val: 0.8369
+ >> [AUX] Train: 0.2051 (GRL Target)
+
+Epoch [31/40] | Time: 265.3s | LR: 0.000097 | Alpha: 0.1394
+ >> [ACT] Train: 0.8982 | Val: 0.8401
+ >> [AUX] Train: 0.2038 (GRL Target)
+
+Epoch [32/40] | Time: 265.6s | LR: 0.000080 | Alpha: 0.1455
+ >> [ACT] Train: 0.9011 | Val: 0.8370
+ >> [AUX] Train: 0.2001 (GRL Target)
+
+Epoch [33/40] | Time: 265.0s | LR: 0.000064 | Alpha: 0.1515
+ >> [ACT] Train: 0.9029 | Val: 0.8411
+ >> [AUX] Train: 0.1954 (GRL Target)
+
+Epoch [34/40] | Time: 263.2s | LR: 0.000050 | Alpha: 0.1576
+ >> [ACT] Train: 0.9047 | Val: 0.8432
+ >> [AUX] Train: 0.1961 (GRL Target)
+
+Epoch [35/40] | Time: 264.2s | LR: 0.000037 | Alpha: 0.1636
+ >> [ACT] Train: 0.9097 | Val: 0.8440
+ >> [AUX] Train: 0.1985 (GRL Target)
+
+Epoch [36/40] | Time: 264.9s | LR: 0.000026 | Alpha: 0.1697
+ >> [ACT] Train: 0.9124 | Val: 0.8452
+ >> [AUX] Train: 0.1963 (GRL Target)
+
+Epoch [37/40] | Time: 264.3s | LR: 0.000017 | Alpha: 0.1758
+ >> [ACT] Train: 0.9113 | Val: 0.8450
+ >> [AUX] Train: 0.1938 (GRL Target)
+
+Epoch [38/40] | Time: 264.2s | LR: 0.000010 | Alpha: 0.1818
+ >> [ACT] Train: 0.9135 | Val: 0.8453
+ >> [AUX] Train: 0.1936 (GRL Target)
+
+Epoch [39/40] | Time: 263.2s | LR: 0.000005 | Alpha: 0.1879
+ >> [ACT] Train: 0.9150 | Val: 0.8438
+ >> [AUX] Train: 0.1917 (GRL Target)
+
+Epoch [40/40] | Time: 264.2s | LR: 0.000002 | Alpha: 0.1939
+ >> [ACT] Train: 0.9157 | Val: 0.8437
+ >> [AUX] Train: 0.1897 (GRL Target)
+Best Validation Accuracy: 0.8453
