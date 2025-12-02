@@ -170,6 +170,178 @@ Epoch [40/40] | Time: 332.8s | LR: 0.000002 | Alpha: 0.1939
  >> [AUX] Train: 0.1624 (GRL Target)
 Best Validation Accuracy: 0.8554
 
+(paper) hyeonu@Desktop-Main:~/new_study/remove_input (main)$ python train.py --study-name test_training --protocol xview --trial-number 511 --lr 0.000456 --dropout 0.450 --alpha 0.2 --prob 0.8 --weight-decay 0.00230 --smoothing 0.1144
+
+--- [Running Trial 511] Protocol: xview ---
+[TRAIN] Normalization stats loaded from stats_xview.npz (Protocol: xview).
+[VAL] Normalization stats loaded from stats_xview.npz (Protocol: xview).
+ >> GRL Target: Camera Viewpoint Classification (3 classes)
+Using 'cosine_decay' scheduler.
+
+Epoch [1/40] | Time: 322.2s | LR: 0.000005 | Alpha: 0.0000
+ >> [ACT] Train: 0.0271 | Val: 0.0484
+ >> [AUX] Train: 0.5334 (GRL Target)
+
+Epoch [2/40] | Time: 320.6s | LR: 0.000069 | Alpha: 0.0000
+ >> [ACT] Train: 0.1538 | Val: 0.3443
+ >> [AUX] Train: 0.6355 (GRL Target)
+
+Epoch [3/40] | Time: 320.5s | LR: 0.000134 | Alpha: 0.0000
+ >> [ACT] Train: 0.3367 | Val: 0.5369
+ >> [AUX] Train: 0.6682 (GRL Target)
+
+Epoch [4/40] | Time: 320.5s | LR: 0.000198 | Alpha: 0.0000
+ >> [ACT] Train: 0.4694 | Val: 0.6204
+ >> [AUX] Train: 0.6868 (GRL Target)
+
+Epoch [5/40] | Time: 320.6s | LR: 0.000263 | Alpha: 0.0000
+ >> [ACT] Train: 0.5568 | Val: 0.6762
+ >> [AUX] Train: 0.7034 (GRL Target)
+
+Epoch [6/40] | Time: 321.7s | LR: 0.000327 | Alpha: 0.0000
+ >> [ACT] Train: 0.6138 | Val: 0.7234
+ >> [AUX] Train: 0.7125 (GRL Target)
+
+Epoch [7/40] | Time: 321.2s | LR: 0.000392 | Alpha: 0.0000
+ >> [ACT] Train: 0.6536 | Val: 0.7651
+ >> [AUX] Train: 0.7195 (GRL Target)
+
+Epoch [8/40] | Time: 320.5s | LR: 0.000456 | Alpha: 0.0000
+ >> [ACT] Train: 0.6852 | Val: 0.7698
+ >> [AUX] Train: 0.7200 (GRL Target)
+
+Epoch [9/40] | Time: 320.4s | LR: 0.000455 | Alpha: 0.0061
+ >> [ACT] Train: 0.7170 | Val: 0.8015
+ >> [AUX] Train: 0.7178 (GRL Target)
+
+Epoch [10/40] | Time: 320.5s | LR: 0.000452 | Alpha: 0.0121
+ >> [ACT] Train: 0.7395 | Val: 0.8206
+ >> [AUX] Train: 0.6761 (GRL Target)
+
+Epoch [11/40] | Time: 320.5s | LR: 0.000447 | Alpha: 0.0182
+ >> [ACT] Train: 0.7616 | Val: 0.8426
+ >> [AUX] Train: 0.6394 (GRL Target)
+
+Epoch [12/40] | Time: 320.5s | LR: 0.000440 | Alpha: 0.0242
+ >> [ACT] Train: 0.7736 | Val: 0.8320
+ >> [AUX] Train: 0.6266 (GRL Target)
+
+Epoch [13/40] | Time: 320.3s | LR: 0.000431 | Alpha: 0.0303
+ >> [ACT] Train: 0.7836 | Val: 0.8470
+ >> [AUX] Train: 0.6173 (GRL Target)
+
+Epoch [14/40] | Time: 320.2s | LR: 0.000420 | Alpha: 0.0364
+ >> [ACT] Train: 0.7965 | Val: 0.8501
+ >> [AUX] Train: 0.6165 (GRL Target)
+
+Epoch [15/40] | Time: 320.3s | LR: 0.000407 | Alpha: 0.0424
+ >> [ACT] Train: 0.8083 | Val: 0.8641
+ >> [AUX] Train: 0.6027 (GRL Target)
+
+Epoch [16/40] | Time: 320.3s | LR: 0.000393 | Alpha: 0.0485
+ >> [ACT] Train: 0.8148 | Val: 0.8631
+ >> [AUX] Train: 0.6028 (GRL Target)
+
+Epoch [17/40] | Time: 320.8s | LR: 0.000377 | Alpha: 0.0545
+ >> [ACT] Train: 0.8254 | Val: 0.8793
+ >> [AUX] Train: 0.5985 (GRL Target)
+
+Epoch [18/40] | Time: 321.7s | LR: 0.000360 | Alpha: 0.0606
+ >> [ACT] Train: 0.8329 | Val: 0.8811
+ >> [AUX] Train: 0.5926 (GRL Target)
+
+Epoch [19/40] | Time: 326.1s | LR: 0.000342 | Alpha: 0.0667
+ >> [ACT] Train: 0.8403 | Val: 0.8812
+ >> [AUX] Train: 0.5871 (GRL Target)
+
+Epoch [20/40] | Time: 321.3s | LR: 0.000323 | Alpha: 0.0727
+ >> [ACT] Train: 0.8484 | Val: 0.8893
+ >> [AUX] Train: 0.5796 (GRL Target)
+
+Epoch [21/40] | Time: 321.5s | LR: 0.000303 | Alpha: 0.0788
+ >> [ACT] Train: 0.8552 | Val: 0.8927
+ >> [AUX] Train: 0.5792 (GRL Target)
+
+Epoch [22/40] | Time: 321.7s | LR: 0.000282 | Alpha: 0.0848
+ >> [ACT] Train: 0.8652 | Val: 0.8896
+ >> [AUX] Train: 0.5764 (GRL Target)
+
+Epoch [23/40] | Time: 321.7s | LR: 0.000261 | Alpha: 0.0909
+ >> [ACT] Train: 0.8710 | Val: 0.9011
+ >> [AUX] Train: 0.5766 (GRL Target)
+
+Epoch [24/40] | Time: 321.7s | LR: 0.000239 | Alpha: 0.0970
+ >> [ACT] Train: 0.8789 | Val: 0.8973
+ >> [AUX] Train: 0.5665 (GRL Target)
+
+Epoch [25/40] | Time: 321.7s | LR: 0.000218 | Alpha: 0.1030
+ >> [ACT] Train: 0.8835 | Val: 0.9041
+ >> [AUX] Train: 0.5655 (GRL Target)
+
+Epoch [26/40] | Time: 322.1s | LR: 0.000196 | Alpha: 0.1091
+ >> [ACT] Train: 0.8914 | Val: 0.9083
+ >> [AUX] Train: 0.5679 (GRL Target)
+
+Epoch [27/40] | Time: 321.2s | LR: 0.000175 | Alpha: 0.1152
+ >> [ACT] Train: 0.8961 | Val: 0.9092
+ >> [AUX] Train: 0.5663 (GRL Target)
+
+Epoch [28/40] | Time: 320.7s | LR: 0.000154 | Alpha: 0.1212
+ >> [ACT] Train: 0.9045 | Val: 0.9133
+ >> [AUX] Train: 0.5652 (GRL Target)
+
+Epoch [29/40] | Time: 321.9s | LR: 0.000134 | Alpha: 0.1273
+ >> [ACT] Train: 0.9110 | Val: 0.9122
+ >> [AUX] Train: 0.5629 (GRL Target)
+
+Epoch [30/40] | Time: 322.2s | LR: 0.000115 | Alpha: 0.1333
+ >> [ACT] Train: 0.9135 | Val: 0.9141
+ >> [AUX] Train: 0.5596 (GRL Target)
+
+Epoch [31/40] | Time: 321.3s | LR: 0.000097 | Alpha: 0.1394
+ >> [ACT] Train: 0.9200 | Val: 0.9180
+ >> [AUX] Train: 0.5601 (GRL Target)
+
+Epoch [32/40] | Time: 321.3s | LR: 0.000080 | Alpha: 0.1455
+ >> [ACT] Train: 0.9242 | Val: 0.9188
+ >> [AUX] Train: 0.5549 (GRL Target)
+
+Epoch [33/40] | Time: 321.7s | LR: 0.000064 | Alpha: 0.1515
+ >> [ACT] Train: 0.9278 | Val: 0.9207
+ >> [AUX] Train: 0.5563 (GRL Target)
+
+Epoch [34/40] | Time: 321.8s | LR: 0.000050 | Alpha: 0.1576
+ >> [ACT] Train: 0.9317 | Val: 0.9229
+ >> [AUX] Train: 0.5559 (GRL Target)
+
+Epoch [35/40] | Time: 321.7s | LR: 0.000037 | Alpha: 0.1636
+ >> [ACT] Train: 0.9358 | Val: 0.9228
+ >> [AUX] Train: 0.5513 (GRL Target)
+
+Epoch [36/40] | Time: 320.5s | LR: 0.000026 | Alpha: 0.1697
+ >> [ACT] Train: 0.9367 | Val: 0.9245
+ >> [AUX] Train: 0.5565 (GRL Target)
+
+Epoch [37/40] | Time: 321.7s | LR: 0.000017 | Alpha: 0.1758
+ >> [ACT] Train: 0.9385 | Val: 0.9241
+ >> [AUX] Train: 0.5623 (GRL Target)
+
+Epoch [38/40] | Time: 321.8s | LR: 0.000010 | Alpha: 0.1818
+ >> [ACT] Train: 0.9380 | Val: 0.9245
+ >> [AUX] Train: 0.5616 (GRL Target)
+
+Epoch [39/40] | Time: 321.4s | LR: 0.000005 | Alpha: 0.1879
+ >> [ACT] Train: 0.9416 | Val: 0.9246
+ >> [AUX] Train: 0.5531 (GRL Target)
+
+Epoch [40/40] | Time: 322.0s | LR: 0.000002 | Alpha: 0.1939
+ >> [ACT] Train: 0.9426 | Val: 0.9241
+ >> [AUX] Train: 0.5555 (GRL Target)
+Best Validation Accuracy: 0.9246
+
+
+
+
 
 (paper) hyeonu@Desktop-Main:~/new_study/remove_input (main)$ python train.py --study-name test_training --protocol xsub --trial-number 502 --lr 0.000456 --dropout 0.450 --alpha 0.2 --prob 0.8 --weight-decay 0.0
 0230 --smoothing 0.1144
