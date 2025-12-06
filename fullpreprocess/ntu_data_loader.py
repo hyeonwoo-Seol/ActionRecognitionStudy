@@ -70,22 +70,31 @@ class NTURGBDDataset(Dataset):
 
     def __getitem__(self, index):
         data = torch.load(self.samples[index])
-        features = data['data'] # (T, 50, 12)
+        features = data['data'] # (T_raw, 50, 12)
         action_label = data['label']
         
         filename = os.path.basename(self.samples[index])
         
-        # [수정] GRL 타겟 라벨 설정 (Auxiliary Label)
-        # X-Sub -> Subject ID (Person ID)
-        # X-View -> Camera ID (Viewpoint ID)
+        # [수정 1] 데이터 길이 맞추기 (Truncate or Pad)
+        # 로드된 데이터가 설정된 MAX_FRAMES보다 길면 자르고, 짧으면 0으로 채웁니다.
+        T_raw = features.shape[0]
+        if T_raw > config.MAX_FRAMES:
+            features = features[:config.MAX_FRAMES, :, :]
+        elif T_raw < config.MAX_FRAMES:
+            pad_len = config.MAX_FRAMES - T_raw
+            pad = torch.zeros((pad_len, features.shape[1], features.shape[2]), dtype=features.dtype)
+            features = torch.cat((features, pad), dim=0)
+            
+        # 이제 features의 길이는 무조건 config.MAX_FRAMES (100)이 됩니다.
+
+        # GRL 타겟 라벨 설정
         aux_label = 0
-        
         if self.protocol == 'xsub':
             sid = int(filename[9:12])
-            aux_label = sid - 1 # 0 ~ 39
+            aux_label = sid - 1 
         elif self.protocol == 'xview':
             cid = int(filename[5:8])
-            aux_label = cid - 1 # 0 ~ 2 (Camera 1, 2, 3)
+            aux_label = cid - 1 
         
         # --- Data Augmentation ---
         if self.split == 'train':
@@ -95,9 +104,11 @@ class NTURGBDDataset(Dataset):
                 c, s = np.cos(angle), np.sin(angle)
                 rot_mat = torch.tensor([[c, 0, s], [0, 1, 0], [-s, 0, c]], dtype=torch.float32)
                 
-                reshaped = features.view(config.MAX_FRAMES, config.NUM_JOINTS, 4, 3)
+                # [수정 2] config.MAX_FRAMES 대신 현재 텐서의 shape[0]을 사용하여 안전하게 변환
+                curr_T = features.shape[0]
+                reshaped = features.view(curr_T, config.NUM_JOINTS, 4, 3)
                 rotated = torch.matmul(reshaped, rot_mat.T)
-                features = rotated.view(config.MAX_FRAMES, config.NUM_JOINTS, 12)
+                features = rotated.view(curr_T, config.NUM_JOINTS, 12)
 
             # 2. Scaling
             if np.random.rand() < config.PROB:
@@ -116,8 +127,8 @@ class NTURGBDDataset(Dataset):
         
         # SlowFast Split
         data_fast = features.permute(2, 0, 1) # (C, T, J)
-        data_slow = data_fast[:, ::2, :]
         
-        # action_label: 주 학습 목표
-        # aux_label: GRL 학습 목표 (Subject or Camera)
+        # [수정] 모델 내부에서 다운샘플링을 2번 수행하므로 로더에서는 원본 길이 유지
+        data_slow = data_fast.clone() 
+        
         return data_fast, data_slow, action_label, aux_label

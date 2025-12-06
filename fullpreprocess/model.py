@@ -64,6 +64,40 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         rsqrt = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
         return x * rsqrt * self.weight
+
+
+class TemporalEmbedding(nn.Module):
+    """
+    (N, T, J, C_in) 입력을 받아서 시간 축(T)을 Conv1d로 압축하고,
+    (N, T_new, J, C_out) 형태로 반환하는 모듈입니다.
+    """
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=2, padding=1):
+        super().__init__()
+        # Conv1d: (Batch, Channel, Length) -> 여기서는 (N*J, C, T) 형태로 처리
+        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, stride, padding)
+        self.norm = RMSNorm(out_channels)
+        self.act = nn.GELU()
+
+    def forward(self, x):
+        # x: (N, T, J, C)
+        N, T, J, C = x.shape
+        
+        # 1. Conv1d를 위해 (N*J, C, T) 형태로 변환
+        x = x.permute(0, 2, 3, 1).contiguous().view(N * J, C, T)
+        
+        # 2. Conv1d 적용 (시간 축 압축)
+        x = self.conv(x)
+        
+        # 3. 다시 (N, T_new, J, C_out) 형태로 복원
+        # x shape: (N*J, C_out, T_new)
+        C_out = x.shape[1]
+        T_new = x.shape[2]
+        x = x.view(N, J, C_out, T_new).permute(0, 3, 1, 2).contiguous()
+        
+        # 4. Norm & Act
+        x = self.norm(x)
+        x = self.act(x)
+        return x
     
 
 class AttentionPooling(nn.Module):
@@ -84,12 +118,14 @@ class SpatioTemporalPositionalEncoding(nn.Module):
     def __init__(self, d_model: int, num_joints: int, max_frames: int, dropout: float = 0.2):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
+        # max_frames 크기만큼 미리 PE를 만들어둠
         self.temporal_pe = nn.Parameter(torch.zeros(1, max_frames, 1, d_model))
         self.spatial_pe = nn.Parameter(torch.zeros(1, 1, num_joints, d_model))
         trunc_normal_(self.temporal_pe, std=.02)
         trunc_normal_(self.spatial_pe, std=.02)
 
     def forward(self, x):
+        # 입력 x의 T 길이에 맞춰서 슬라이싱 (유동적 T 지원)
         x = x + self.temporal_pe[:, :x.size(1), :, :]
         x = x + self.spatial_pe[:, :, :x.size(2), :]
         return self.dropout(x)
@@ -171,119 +207,142 @@ class SlowFast_Transformer(nn.Module):
                  num_joints=config.NUM_JOINTS,
                  num_coords=config.NUM_COORDS,
                  num_classes=config.NUM_CLASSES,
-                 fast_dims=config.FAST_DIMS,
-                 slow_dims=config.SLOW_DIMS,
-                 num_aux_classes=config.NUM_SUBJECTS, # [수정] 범용적인 보조 클래스 수
-                 alpha=1.0
+                 num_aux_classes=config.NUM_SUBJECTS,
+                 alpha=1.0,
+                 **kwargs
                  ):
         super().__init__()
         
-        self.fast_dims = fast_dims
-        self.slow_dims = slow_dims
+        # 명시적 차원 정의 (Explicit Dimensions)
+        # Fast Dims: [64, 64, 64]
+        # Slow Dims: [64, 128, 256]
         
-        if len(self.fast_dims) != len(self.slow_dims):
-            raise ValueError("Fast와 Slow 경로의 블록 수가 동일해야 합니다.")
+        # ==================================================================================
+        # 1. Stem (Input Projection & Temporal Embedding)
+        # ==================================================================================
+        # Fast Stem: Conv1d(stride=2) -> T/2 압축, dim 64
+        self.fast_embedding = TemporalEmbedding(
+            in_channels=num_coords, out_channels=64, 
+            kernel_size=3, stride=2, padding=1
+        )
 
-        # --- Fast Pathway ---
-        self.fast_input_projection = nn.Linear(num_coords, fast_dims[0])
-        self.fast_blocks = nn.ModuleList()
-        for i in range(len(fast_dims) - 1):
-            fast_pe = SpatioTemporalPositionalEncoding(
-                d_model=fast_dims[i+1], num_joints=num_joints, max_frames=config.MAX_FRAMES
-            )
-            self.fast_blocks.append(
-                ST_Transformer_Block(
-                    in_features=fast_dims[i], out_features=fast_dims[i+1],
-                    num_joints=num_joints, pos_encoder=fast_pe
-                )
-            )
+        # Slow Stem: Conv1d(stride=2) -> Conv1d(stride=2) -> T/4 압축, dim 64
+        self.slow_embedding = nn.Sequential(
+            TemporalEmbedding(in_channels=num_coords, out_channels=64, kernel_size=3, stride=2, padding=1),
+            TemporalEmbedding(in_channels=64, out_channels=64, kernel_size=3, stride=2, padding=1)
+        )
 
-        # --- Slow Pathway ---
-        self.slow_input_projection = nn.Linear(num_coords, slow_dims[0])
-        self.slow_blocks = nn.ModuleList()
-        for i in range(len(slow_dims) - 1):
-            slow_pe = SpatioTemporalPositionalEncoding(
-                d_model=slow_dims[i+1], num_joints=num_joints, max_frames=(config.MAX_FRAMES // 2)
-            )
-            self.slow_blocks.append(
-                ST_Transformer_Block(
-                    in_features=slow_dims[i], out_features=slow_dims[i+1],
-                    num_joints=num_joints, pos_encoder=slow_pe
-                )
-            )
+        # ==================================================================================
+        # 2. Layer 1 (Block 1 + Lateral Connection)
+        # ==================================================================================
+        # [Lateral 1] Fast(64) <-> Slow(64) 교환
+        # Fusion이 Block 입력 전에 일어난다고 가정 (기존 로직 유지)
+        self.lat_layer1 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(5, 1), stride=(2, 1), padding=(2, 0))
+        self.inv_lat_layer1 = nn.ConvTranspose2d(in_channels=64, out_channels=64, kernel_size=(5, 1), stride=(2, 1), padding=(2, 0), output_padding=(1, 0))
+        
+        # [Block 1]
+        fast_pe_1 = SpatioTemporalPositionalEncoding(d_model=64, num_joints=num_joints, max_frames=config.MAX_FRAMES // 2)
+        slow_pe_1 = SpatioTemporalPositionalEncoding(d_model=128, num_joints=num_joints, max_frames=config.MAX_FRAMES // 4)
+        
+        # Fast: 64 -> 64
+        self.fast_block1 = ST_Transformer_Block(in_features=64, out_features=64, num_joints=num_joints, pos_encoder=fast_pe_1)
+        # Slow: 64 -> 128 (Dim 확장)
+        self.slow_block1 = ST_Transformer_Block(in_features=64, out_features=128, num_joints=num_joints, pos_encoder=slow_pe_1)
 
-        # --- Lateral Connection ---
-        self.lateral_connections = nn.ModuleList()
-        for i in range(len(self.fast_dims)-1):
-            self.lateral_connections.append(
-                nn.Conv2d(
-                    in_channels=fast_dims[i], out_channels=slow_dims[i],
-                    kernel_size=(5, 1), stride=(2, 1), padding=(2, 0)
-                )
-            )
 
-        self.inv_lateral_connections = nn.ModuleList()
-        for i in range(len(self.fast_dims)-1):
-            self.inv_lateral_connections.append(
-                nn.ConvTranspose2d(
-                    in_channels=slow_dims[i], out_channels=fast_dims[i],
-                    kernel_size=(5, 1), stride=(2, 1), padding=(2, 0), output_padding=(1, 0)
-                )
-            )
+        # ==================================================================================
+        # 3. Layer 2 (Block 2 + Lateral Connection)
+        # ==================================================================================
+        # [Lateral 2] Fast(64) <-> Slow(128) 교환
+        self.lat_layer2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=(5, 1), stride=(2, 1), padding=(2, 0))
+        self.inv_lat_layer2 = nn.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=(5, 1), stride=(2, 1), padding=(2, 0), output_padding=(1, 0))
 
-        # --- Final Classification ---
-        final_fast_dim = fast_dims[-1]
-        final_slow_dim = slow_dims[-1]
+        # [Block 2]
+        fast_pe_2 = SpatioTemporalPositionalEncoding(d_model=64, num_joints=num_joints, max_frames=config.MAX_FRAMES // 2)
+        slow_pe_2 = SpatioTemporalPositionalEncoding(d_model=256, num_joints=num_joints, max_frames=config.MAX_FRAMES // 4)
+
+        # Fast: 64 -> 64
+        self.fast_block2 = ST_Transformer_Block(in_features=64, out_features=64, num_joints=num_joints, pos_encoder=fast_pe_2)
+        # Slow: 128 -> 256 (Dim 확장)
+        self.slow_block2 = ST_Transformer_Block(in_features=128, out_features=256, num_joints=num_joints, pos_encoder=slow_pe_2)
+
+
+        # ==================================================================================
+        # 4. Heads (Pooling & Classification)
+        # ==================================================================================
+        final_fast_dim = 64
+        final_slow_dim = 256
         combined_dim = final_fast_dim + final_slow_dim
 
         self.fast_pool = AttentionPooling(d_model=final_fast_dim)
         self.slow_pool = AttentionPooling(d_model=final_slow_dim)
 
-        # [Head A] 행동 분류 (Main Task)
+        # Main Task
         self.action_head = nn.Sequential(
             nn.Dropout(p=config.DROPOUT),
             nn.Linear(combined_dim, num_classes)
         )
         
-        # [Head B] 보조 분류 (Auxiliary Task via GRL)
-        # X-Sub: Subject Classification / X-View: Camera Classification
+        # Aux Task
         self.grad_reversal = GradientReversalLayer(alpha=alpha) 
-        
         self.aux_classifier = nn.Sequential(
             nn.Linear(combined_dim, 256),
             nn.GELU(),
             RMSNorm(256),
             nn.Dropout(p=config.DROPOUT),
-            nn.Linear(256, num_aux_classes) # [수정] 동적 클래스 개수 사용
+            nn.Linear(256, num_aux_classes)
         )
 
     
     def forward(self, x_fast, x_slow):
-        N, _, T_fast, J = x_fast.shape
-        _, _, T_slow, _ = x_slow.shape
-
+        # x_fast, x_slow: (N, C, T, J) Input expected from Loader
+        # Permute to (N, T, J, C) for Embeddings
         x_fast = x_fast.permute(0, 2, 3, 1).contiguous()
         x_slow = x_slow.permute(0, 2, 3, 1).contiguous()
         
-        x_fast = self.fast_input_projection(x_fast)
-        x_slow = self.slow_input_projection(x_slow)
+        # -----------------------------
+        # 1. Embeddings (Hierarchical Compression)
+        # -----------------------------
+        x_fast = self.fast_embedding(x_fast) # T -> T/2
+        x_slow = self.slow_embedding(x_slow) # T -> T/4
         
-        for i in range(len(self.fast_blocks)):
-            # Bi-directional Lateral Fusion
-            x_fast_permuted = x_fast.permute(0, 3, 1, 2).contiguous()
-            fast_to_slow = self.lateral_connections[i](x_fast_permuted)
-            fast_to_slow = fast_to_slow.permute(0, 2, 3, 1).contiguous()
+        # -----------------------------
+        # 2. Layer 1 Execution
+        # -----------------------------
+        # Lateral Fusion 1
+        x_fast_perm = x_fast.permute(0, 3, 1, 2).contiguous() # (N, C, T, J)
+        x_slow_perm = x_slow.permute(0, 3, 1, 2).contiguous() # (N, C, T, J)
 
-            x_slow_permuted = x_slow.permute(0, 3, 1, 2).contiguous()
-            slow_to_fast = self.inv_lateral_connections[i](x_slow_permuted)
-            slow_to_fast = slow_to_fast.permute(0, 2, 3, 1).contiguous()
+        fast2slow_1 = self.lat_layer1(x_fast_perm).permute(0, 2, 3, 1).contiguous()
+        slow2fast_1 = self.inv_lat_layer1(x_slow_perm).permute(0, 2, 3, 1).contiguous()
 
-            x_slow_combined = x_slow + fast_to_slow
-            x_fast_combined = x_fast + slow_to_fast
-            
-            x_fast = self.fast_blocks[i](x_fast_combined)
-            x_slow = self.slow_blocks[i](x_slow_combined)
-            
+        x_slow_in_1 = x_slow + fast2slow_1
+        x_fast_in_1 = x_fast + slow2fast_1
+
+        # Block 1
+        x_fast = self.fast_block1(x_fast_in_1) # Output: 64
+        x_slow = self.slow_block1(x_slow_in_1) # Output: 128
+
+        # -----------------------------
+        # 3. Layer 2 Execution
+        # -----------------------------
+        # Lateral Fusion 2
+        x_fast_perm = x_fast.permute(0, 3, 1, 2).contiguous()
+        x_slow_perm = x_slow.permute(0, 3, 1, 2).contiguous()
+
+        fast2slow_2 = self.lat_layer2(x_fast_perm).permute(0, 2, 3, 1).contiguous()
+        slow2fast_2 = self.inv_lat_layer2(x_slow_perm).permute(0, 2, 3, 1).contiguous()
+
+        x_slow_in_2 = x_slow + fast2slow_2
+        x_fast_in_2 = x_fast + slow2fast_2
+
+        # Block 2
+        x_fast = self.fast_block2(x_fast_in_2) # Output: 64
+        x_slow = self.slow_block2(x_slow_in_2) # Output: 256
+
+        # -----------------------------
+        # 4. Final Classification
+        # -----------------------------
         summary_fast = self.fast_pool(x_fast)
         summary_slow = self.slow_pool(x_slow)
 
@@ -292,6 +351,6 @@ class SlowFast_Transformer(nn.Module):
         output_action = self.action_head(combined_summary)
 
         reversed_features = self.grad_reversal(combined_summary)
-        output_aux = self.aux_classifier(reversed_features) # [수정] 이름 변경 (subject -> aux)
+        output_aux = self.aux_classifier(reversed_features)
 
         return output_action, output_aux

@@ -225,8 +225,6 @@ def run_trial(args):
             num_joints=config.NUM_JOINTS,
             num_coords=config.NUM_COORDS,
             num_classes=config.NUM_CLASSES,
-            fast_dims=config.FAST_DIMS,
-            slow_dims=config.SLOW_DIMS,
             num_aux_classes=num_aux_classes, # [설정] 동적 전달
             alpha=0.0 
         ).to(device)
