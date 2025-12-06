@@ -11,6 +11,9 @@
 # [수정 사항 2025-11-27]
 # - 효율성 개선: 좌표 단계에서 먼저 200프레임으로 자르고 계산.
 # - [Data Leakage Fix] X-Sub와 X-View 프로토콜의 통계를 분리하여 계산 및 저장.
+# [수정 사항 2025-12-06] (현우님 요청)
+# - Temporal Downsampling [::2] 제거: 원본 30fps 데이터를 그대로 보존.
+# - 모델 내부에서 Downsampling을 수행하기 위함.
 # ##----------------------------------------------------------------------------
 
 import os
@@ -213,10 +216,17 @@ def process_file_for_stats(filename):
     coords = _read_skeleton_file(path)
     if coords.shape[0] == 0: return None
     
-    # 효율적 처리: 자르고 -> 계산
-    limit_frames = MAX_FRAMES * 2
+    # [수정] 2배수 제한 제거 -> 1배수 (MAX_FRAMES)
+    # 왜냐하면 이제 [::2] 다운샘플링을 하지 않기 때문입니다.
+    # 하지만 통계 계산 시에는 모든 유효 프레임을 다 쓰는 것이 좋으므로
+    # MAX_FRAMES 제한을 넉넉하게 두거나 제거해도 되지만, 일관성을 위해 유지합니다.
+    # 기존: limit_frames = MAX_FRAMES * 2
+    limit_frames = MAX_FRAMES 
+    
     cropped_coords = coords[:limit_frames]
-    features = _calculate_features(cropped_coords[::2])
+    
+    # [수정] [::2] 제거하여 모든 프레임 사용
+    features = _calculate_features(cropped_coords)
     
     features_flat = features.reshape(-1, config.NUM_COORDS)
     
@@ -285,9 +295,10 @@ def process_and_save_file(filename):
         feat = np.zeros((MAX_FRAMES, NUM_JOINTS, config.NUM_COORDS))
         label = 0
     else:
-        limit_frames = MAX_FRAMES * 2
+        # [수정] 2배수 제거, [::2] 제거
+        limit_frames = MAX_FRAMES 
         cropped_coords = coords[:limit_frames]
-        feat_raw = _calculate_features(cropped_coords[::2])
+        feat_raw = _calculate_features(cropped_coords) # Full Frame
         
         T = feat_raw.shape[0]
         if T < MAX_FRAMES:
@@ -311,7 +322,7 @@ def main():
     if not os.path.exists(STATS_FILE_XSUB) or not os.path.exists(STATS_FILE_XVIEW):
         calculate_and_save_stats()
         
-    print("--- Processing All Files ---")
+    print("--- Processing All Files (Full Resolution, No [::2]) ---")
     filenames = os.listdir(SOURCE_DATA_PATH)
     num_cores = cpu_count() - 1 if cpu_count() > 1 else 1
     

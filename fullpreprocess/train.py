@@ -86,7 +86,7 @@ def plot_history(history, save_path):
 def train_one_epoch(model, loader, criterion_action, criterion_aux, optimizer, device, scaler, epoch):
     model.train()
     
-    # [수정] Optimizer에서 현재 LR 가져오기 (Scheduler에 의해 동적으로 변경된 실제 값)
+    # Optimizer에서 현재 LR 가져오기 (Scheduler에 의해 동적으로 변경된 실제 값)
     current_lr = optimizer.param_groups[0]['lr']
     current_alpha = get_current_alpha(epoch, max_alpha=config.ADVERSARIAL_ALPHA)
     
@@ -98,7 +98,7 @@ def train_one_epoch(model, loader, criterion_action, criterion_aux, optimizer, d
     correct_aux = 0
     total_samples = 0
 
-    # [수정] 진행률 표시줄에 현재 LR과 Alpha 표시 (소수점 6자리 고정 표기법 사용)
+    # 진행률 표시줄에 현재 LR과 Alpha 표시 (소수점 6자리 고정 표기법 사용)
     # 예: LR=0.000100 | α=0.000
     desc_str = f"[Train Ep {epoch+1}/{MAX_EPOCHS_PER_TRIAL}] LR={current_lr:.6f} | α={current_alpha:.3f}"
     train_bar = tqdm(loader, desc=desc_str, colour="green", leave=False)
