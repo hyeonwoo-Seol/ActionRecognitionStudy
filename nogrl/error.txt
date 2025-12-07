@@ -1,16 +1,0 @@
-
---- [Running Standalone Training] ---
-Params: LR=0.000480, Dropout=0.450
-Scanning train data paths from '../nturgbd_processed_allNew200/'...
-[TRAIN] Scanning file paths:   0%|          | 0/56880 [00:00<?, ?it/s][TRAIN] Scanning file paths: 100%|██████████| 56880/56880 [00:00<00:00, 1806351.07it/s]
-Normalization stats loaded successfully.
-Scanning val data paths from '../nturgbd_processed_allNew200/'...
-[VAL] Scanning file paths:   0%|          | 0/56880 [00:00<?, ?it/s][VAL] Scanning file paths: 100%|██████████| 56880/56880 [00:00<00:00, 1915025.90it/s]
-Normalization stats loaded successfully.
-Using 'cosine_decay' scheduler.
-
---- Starting from Epoch 0. ---
-[Train]:   0%|[32m          [0m| 0/630 [00:00<?, ?it/s]                                                
-
--------------------------------------------------
-     [Trial standalone 중단됨]

@@ -1,9 +1,0 @@
-우선, NTU RGB+D 60 데이터셋으로 다음 모델을 학습시키고 싶어.
-내가 만들고 싶은 모델은 각 joint의 프레임별 좌표의 변화량을 계산한 뒤, 이러한 변화량을 4개의 직렬로 연결된 Mamba 블록 모델에 입력시키고 싶어.
-그리고 이러한 모델은 joint의 프레임별 좌표 변화량만을 가지고 Action Recognition을 하는거지.
-
-첨부된 txt 파일은 내가 NTU RGB+D 60 데이터셋 안에 있는 하나의 .skeleton 파일을 txt 파일로 변경해서 첨부했어. 실제로는 .skeleton 파일을 사용할거야.
-
-그래서 내가 ntu_data_loader.py와 model.py와 train.py와 evaluate.py와 utils.py를 생성했어.
-이제 ntu_data_loader.py 코드를 작성해줘.
-ntu-rgb+d 60 데이터셋의 경로는 '../paper-review/Action_Recognition/Code/nturgbd01/' 이야.
