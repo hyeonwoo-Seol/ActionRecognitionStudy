@@ -68,33 +68,46 @@ class RMSNorm(nn.Module):
 
 class TemporalEmbedding(nn.Module):
     """
-    (N, T, J, C_in) 입력을 받아서 시간 축(T)을 Conv1d로 압축하고,
+    (N, T, J, C_in) 입력을 받아서 
+    1) Linear로 차원을 확장하고 (C_in -> C_out)
+    2) Conv1d로 시간 축(T)을 압축하여 (T -> T_new)
     (N, T_new, J, C_out) 형태로 반환하는 모듈입니다.
     """
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=2, padding=1):
         super().__init__()
-        # Conv1d: (Batch, Channel, Length) -> 여기서는 (N*J, C, T) 형태로 처리
-        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, stride, padding)
+        
+        # 차원 확장은 Linear가 담당
+        self.projection = nn.Linear(in_channels, out_channels)
+        
+        # Conv1d는 시간 축 압축만 담당 (채널 수는 out_channels로 고정)
+        # Linear를 거쳐서 이미 C_out이 되었으므로, Conv1d의 입력 채널도 out_channels입니다.
+        self.conv = nn.Conv1d(out_channels, out_channels, kernel_size, stride, padding)
+        
         self.norm = RMSNorm(out_channels)
         self.act = nn.GELU()
 
     def forward(self, x):
-        # x: (N, T, J, C)
-        N, T, J, C = x.shape
+        # x: (N, T, J, C_in)
+        N, T, J, C_in = x.shape
         
-        # 1. Conv1d를 위해 (N*J, C, T) 형태로 변환
-        x = x.permute(0, 2, 3, 1).contiguous().view(N * J, C, T)
+        # 1. Linear Projection (C_in -> C_out)
+        # 차원 확장을 먼저 수행합니다.
+        x = self.projection(x) # Output: (N, T, J, C_out)
         
-        # 2. Conv1d 적용 (시간 축 압축)
+        # 2. Conv1d를 위해 (N*J, C_out, T) 형태로 변환
+        # permute: (N, T, J, C_out) -> (N, J, C_out, T) -> (N*J, C_out, T)
+        x = x.permute(0, 2, 3, 1).contiguous().view(N * J, -1, T)
+        
+        # 3. Conv1d 적용 (시간 축 압축)
         x = self.conv(x)
         
-        # 3. 다시 (N, T_new, J, C_out) 형태로 복원
+        # 4. 다시 (N, T_new, J, C_out) 형태로 복원
         # x shape: (N*J, C_out, T_new)
         C_out = x.shape[1]
         T_new = x.shape[2]
         x = x.view(N, J, C_out, T_new).permute(0, 3, 1, 2).contiguous()
         
-        # 4. Norm & Act
+        # 5. Norm & Act
         x = self.norm(x)
         x = self.act(x)
         return x
