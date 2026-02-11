@@ -1,3 +1,0 @@
-model.py 빼고 preprocess 관련 문제를 수정한 디렉토리
-
-model.py의 각종 논리적 오류는 stream9에서 수정할 예정
