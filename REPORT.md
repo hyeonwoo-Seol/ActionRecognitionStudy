@@ -1,463 +1,265 @@
-# 데이터셋에 대한 이해
+# SlowFast Spatial-Temporal Transformer 보고서
 
-## NTU RGB+D 60과 120의 차이
+# 제목: SlowFast Spatial-Temporal_Transformer
 
-NTU RGB+D skeleton 60과 120은 3D 센서로 촬영한 인간 행동 인식 연구 데이터셋입니다.
+---
 
-NTU RGB+D 60과 120의 차이는 행동 클래스 수, 영상 샘플 수, 촬영 대상자 수, 촬영 환경에서 차이가 있습니다.
+# 0. 요약
 
-60은 행동 클래스 수가 60개이고, 영상 샘플 수는 56000개이고, 촬영 대상자 수는 40명이고, 촬영 환경은 실내 실험실 환경입니다.
+## Two Stream Spatial-Temporal Transformer 연구
 
-120은 행동 클래스 수가 120개이고, 영상 샘플 수는 114,000개 이상이고, 촬영 대상자 수는 106명이고, 촬영 환경은 실내 실험실 환경에 새로운 대규모 환경을 추가한 것입니다.
+## 0-1. 연구 목적
 
-## NTU RGB+D 60의 데이터 분석
+<aside>
 
-NTU RGB+D 60의 데이터 중 하나인 S001C001P001R001A001.skeleton을 보면, S001은 Setup 번호인데 촬영 환경 및 카메라 배치를 의미합니다. C001은 카메라 ID를 의미하고, P001은 사람 ID 입니다. R001은 Replication 번호인데 동일한 사람이 동일한 행동을 반복한 횟수입니다. A001은 행동의 종류를 나타냅니다.
+행동 사전 지식을 활용해 모델의 학습 효율성을 높이고 Two Stream의 SlowFast 구조를 사용하여 정확도와 효율성의 균형을 달성하고자 한다.
 
-파일 안에 첫 번째 줄에 있는 숫자는 프레임 수로, 행동 샘플이 해당 프레임 수로 구성되어 있다는 것을 나타냅니다.
+</aside>
 
-그리고 그 다음은 신체 수로, 해당 프레임에서 감지된 사람의 신체 수를 나타냅니다.
+## 0-2. 제안 방법론
 
-그 다음 줄의 긴 숫자는 감지된 신체의 고유 ID입니다.
+<aside>
 
-그리고 그 다음 줄의 숫자(25)는 감지되어 추적하고 있는 Joint의 수를 나타냅니다.
+Two Stream에서 처리하는 방식에 차이를 둔다. 그리고 이 두 Stream 사이에 Connection을 두어 상호 정보 교환을 통해 시공간 특징을 융합한다.
 
-이후에 25개의 줄은 각 joint의 상세 x/y/z 좌표와 이미지 상의 2D 좌표, 관절 방향등이 적혀 있습니다.
+1. Fast Stream: 높은 시간 해상도와 낮은 채널 수를 가진 Stream이다. 급격한 움직임을 포착한다.
+2. Slow Stream:  낮은 시간 해상도와 높은 채널 수를 가진 Stream이다. 전체적이고 의미적인 정보를 학습한다.
+3. GRL: Gradient Reversal Layer를 통해 피험자 및 시점 변화에 강건한 도메인 불변 특징을 학습한다.
+4. Input Feature: 12차원 벡터(Bone, Velocity, Relative Center, Relative to Other)를 사용하여 모델이 얕은 구조에서도 행동 패턴을 쉽게 학습하도록 유도한다.
+</aside>
 
-## 이 데이터셋을 사용할 때 주의해야 할 점
+## 0-3. 핵심 결과
 
-이 데이터셋에는 한 프레임 안에 2명의 skeleton 데이터가 포함될 수 있어서 코드를 작성할 때 2명의 행동을 인식하는 경우를 고려해야 합니다.
+<aside>
 
-한 명만 고려했을 때 정확도는 60%에서 멈추었지만, 2명의 행동 데이터를 고려하게 코드를 작성했더니 정확도가 70%로 상승했습니다.
+NTU RGB+D 데이터셋에서 다른 모델 대비 낮은 성능을 달성했고 큰 연산량 절감 효과도 보지 못했다.
 
-# 핵심 아이디어
+</aside>
 
-제 아이디어는 위치 좌표를 사용하지 않고 각 joint의 프레임 간 이동 거리, 이동 방향, 가속도만을 사용해서 행동 인식을 하고자 합니다.
+| 모델 이름 | 정확도 (Xview) $\mathbb{E}_1$ | 정확도 (Xsub) $\mathbb{E}_1$ | 파라미터 수 | 연산량 |
+| --- | --- | --- | --- | --- |
+| Ours | 91.19% | 85.54% | 1.89M | 3.28G |
+| Skateformer | 97% | 92.6% | 2.03M | 3.62G |
+| HD-GCN | 95.7% | 90.6% | 1.66M | 3.44G |
+| FR-Head(GCN) | 95.3% | 90.3% | 1.45M | 3.60G |
 
-## 위치 좌표 대신 이동과 변화량을 사용하는 이유
+## 0-4. 실험 분석 및 한계
 
-위치 좌표는 프레임 안에서 매우 큰 값 범위를 가질 수 있고, 소수점 이하의 정밀도가 중요합니다.
-하지만 프레임 사이의 이동량과 속도는 일반적으로 작은 범위 값 안에 집중되어 있습니다. 
+<aside>
 
-30프레임 기준으로 1프레임당 1/30초 이므로, 속도나 가속도는 0 근처에 분포할 가능성이 높습니다. 이러한 데이터 분포는 낮은 비트로 양자화하기에 유리합니다.
+Transformer 모델인 SkateFormer에 비해 연산량과 파라미터 수가 낮지만 정확도가 5.81%, 7.16%p 낮다. 그리고 GCN 기반 모델들에 비해 파라미터 수는 많고 연산량은 적지만 정확도가 약 4.6%p, 5%p 낮다.
 
-만약 8비트 양자화를 적용한다고 했을 경우, 520.18723 같은 위치 좌표를 양자화하면 정보 손실이 크지만, 프레임 간 이동량인 0.51283 같은 값은 스케일링을 통해 8비트 범위에서 효율적으로 매핑할 수 있어서 정보 손실을 최소화할 수 있습니다. 이는 모델 경량화와 추론 속도 향상에 중요한 역할을 합니다.
+이 모델은 Two Stream을 통해 모델이 보는 시간축을 다르게 해서 행동 인식 정확도를 향상시키고자 했으나 높은 정확도를 달성하지 못했다.
 
-그리고 좌표값 대신 변화량 정보를 사용하면 Translation Invariance를 확보할 수 있습니다.
+</aside>
 
-위치 좌표를 사용하면 사람이 화면 오른쪽에서 손을 흔드는 것과 화면 왼쪽에서 손을 흔드는 것에서 좌표 값이 다릅니다. 이 때 모델은 위치에 상관 없이 손을 흔드는 패턴을 학습해야 하고, 이는 많은 데이터와 더 큰 모델을 필요로 합니다.
+# 1. Abstract
 
-하지만 이동과 방향 정보를 사용하면 사람이 어디에 있던지 손을 흔드는 행동에서 팔꿈치 관절은 손목 관절 대비 상대적인 변화량은 거의 동일합니다.
+<aside>
 
-모델은 불필요한 위치 정보를 배제하고 순수한 움직임 패턴에만 집중할 수 있습니다. 이를 통해 모델을 robust 하게 만들 수 있습니다.
+이 연구는 Skeleton-based Action Recognition의 정확도와 연산 효율성을 확보하기 위해 SlowFast Spatial-Temporal Transformer 모듈을 제안한다. 이 모델은 원시 좌표 대신 척추 길이로 정규화된 12채널의 물리학적 특징 벡터인 Bone, Velocity, Relative Center, Relative To Other Vector를 입력으로 사용한다. 이를 통해 신체 구조의 위상 정보와 움직임 정보를 명시적으로 학습한다.
 
-위치 좌표는 Static한 정보이고, 거리와 속도와 가속도는 Dynamic한 정보입니다. 이러한 Dynamic한 정보는 행동을 표현하는 데 직접적인 정보를 제공한다고 생각합니다. 왜냐하면 행동이 곧 동적이기 때문입니다.
+제안하는 네트워크는 시간적 해상도와 채널 용량을 비대칭적으로 설계한 두 개의 스트림으로 구성된다. Fast Stream은 높은 시간 해상도(T/2)와 낮은 채널 차원을 유지하여 급격한 움직임을 포착하며, Slow Stream은 낮은 시간 해상도(T/4)와 깊은 채널 차원을 통해 거시적인 행동의 의미를 학습한다. 두 스트림은 측면 연결을 통해 상호 정보를 교환하며 시공간적 특징을 통합한다. 또한, 피험자 및 시점의 변화에 강건한 특징을 학습하기 위해 Gradient Reversal Layer (GRL)를 적용하여 도메인 불변성을 강화하였다.
 
-입력이 위치 좌표인 경우 여러 프레임 시퀀스를 보고 좌표값들의 변화 추이를 스스로 계산하고 학습해야 합니다. 좌표에 미분을 통해 속도 개념을 스스로 학습하라고 요구하는 것과 같습니다. 하지만 변화량을 입력으로 주면 행동의 본질인 움직임 정보가 이미 계산되어 명시적으로 주는 것이기 때문에 모델이 더 단순하고 직접적으로 움직임 패턴을 학습할 것으로 기대합니다.
+NTU RGB+D 60 데이터셋을 이용한 실험 결과, 제안 모델은 X-View 91.19%, X-Sub 85.54%의 정확도를 달성하였다. 특히 3.28 GFLOPs의 낮은 연산량과 200 FPS의 빠른 처리 속도를 기록하여, 경량화된 구조로도 높은 성능과 실시간성을 확보할 수 있음을 입증하였다.
 
-이동 거리, 속도, 가속도를 구하기 위해서는 처음에 위치 좌표를 사용해서 전처리를 해야 합니다. 하지만 이 때의 연산량은 딥러닝 모델에 비해 매우 낮은 수준입니다. 따라서 이러한 전처리를 통해 얻을 수 있는 장점이 더 크다고 생각합니다.
+</aside>
 
-# 실험 (1~3)
+---
 
-## 구조
+# 2. 아이디어 및 모델 구조
 
-### preprocess_ntu_data.py
+![image.png](image.png)
 
-preprocess_ntu_data.py에서는 NTU RGB+D 60 Skeleton 데이터셋을 불러와서 전처리를 합니다.
+![image.png](image%201.png)
 
-.skeleton 파일을 읽어서 (num_frames, 2, 25 , 3) 형태의 numpy 배열로 변환합니다.
+## 2-1. Input Data without Coords
 
-skeleton 중심화를 한 뒤에 변위, 거리, 방향, 가속도를 계산한 뒤 이를 .pt 파일로 저장합니다.
+### 2-1-a. Input 데이터를 미리 변형해야 하는 이유
 
-### ntu_data_loader.py
+<aside>
 
-데이터를 불러오고 훈련과 검증 모드를 설정하고 다양한 증강 기법을 적용시키는 파일입니다.
+척추 길이를 이용한 정규화를 했다. 카메라와 피사체의 거리나 사람의 키에 상관 없이 동일한 동작은 동일한 크기의 벡터를 갖도록 만든다.
 
-train.py에서 NTURGBDDataset 객체를 생성할 때 명시적으로 train, val을 지정합니다.
+Transformer는 모든 토큰을 동등하게 취급하기 때문에 입력데이터들 사이의 관계를 학습하는 데 더 많은 층이 필요하다. 따라서 물리학적 사전지식을 포함하는 12차원의 입력 데이터를 만들어 모델에 주면 얕은 구조로도 고차원적인 행동 분류에 집중할 수 있게 된다.
 
-임의 회전, 가우시안 노이즈 추가, 임의 스케일링, 관절 마스킹, 시간 마스킹 증강 기법이 사용됐습니다.
+아래에서 설명할 Bone Vector와 Velocity Vector는 데이터가 존재하는 공간의 위상을 명확하게 한다. 절대 좌표가 아닌 신체 중심을 기준으로 하는 상대 좌표에 대한 Bone Vector는 위치 불변성을 강화하며, Velocity Vector는 움직임 정보를 제공한다. 이를 통해 데이터의 형태들이 클래스별로 구분되기 쉬운 형태로 정렬되어 입력되고, 따라서 비선형 변환을 많이 수행하지 않아도 결정 경계를 쉽게 그릴 수 있다.
 
-증강이 끝난 뒤에 (X - 평균) / 표준편차를 해서 훈련 데이터의 분포를 안정시켜 학습을 준비합니다.
+</aside>
 
-### model.py
+### 2-1-b. 4가지 Input data 변형
 
-모델은 Shif-GCN과 Spatial - Temporal Transformer를 이어서 붙인 아키텍처를 사용했습니다.
+<aside>
 
-우선 첫 프레임 좌표는 pose_vector를 생성하는 데 사용됩니다. 그리고 전체 움직임 정보를 고차원 벡터로 만들고 위치 정보를 추가합니다.
+따라서 x, y, z 좌표 데이터를 12개의 채널을 가진 특징으로 변환한다.
 
-이제 Shift-GCN + ST-Transformer 블록을 통과합니다.
+Normalized Bone Vector는 부모 관절에서 자식 관절로 향하는 방향과 길이를 의미한다. 이 특징은 3차원이다. 예를 들어, 어깨에서 팔꿈치로 뻗은 팔의 각도와 방향을 나타낸다.
 
-Shift-GCN에서는 미리 정의된 3개의 인접행렬(Root, Close, Far)를 이용해 공간적 특징을 추출합니다.
+Normalized Velocity Vector는 현재 프레임과 이전 프레임의 좌표 차이를 계산한다. 이 특징은 3차원이다. 정지한 동작은 0이고 빠르게 움직이는 관절은 큰 값이다. 자세는 비슷하지만 속도가 다른 행동을 구분하게 한다.
 
-Shift-GCN을 통과한 텐서는 Spatial Transformer와 Temporal Transformer를 순서대로 통과합니다. 이 각 블록 사이에 잔차 연결이 추가됩니다.
+Relative Center Vector는 두 사람 사이의 Global Interaction을 나타낸다. 즉, 사람1의 몸 중심과 사람2의 몸 중심 사이의 거리 벡터다. 3차원이다. 포옹이나 악수처럼 거리가 다른 행동에서 중요하다.
 
-Attention Pooling을 통해 중요한 부분에 높은 가중치를 부여하여 가중합을 계산합니다.
+Relative To Other Vector는 정밀한 상호작용 디테일을 의미한다. 사람1의 모든 관절이 사람2의 몸 중심으로부터 어디에 있는지를 계산한다.
 
-그리고 pose_vector와 이 가중합 벡터를 concatenate 합니다.
+최종적으로 (Batch, Time, Joints, Dimension) 모양이 출력된다.
 
-마지막으로 dropout과 FC Layer를 통과시켜 최종 확률을 출력합니다.
+</aside>
 
-여기서 Shift-GCN, Spatial Transformer, Temporal Transformer의 바로 뒤와 잔차 연결 블록 내부에서 RMS Normalization이 적용되어 데이터의 스케일을 정규화하고 다음 층으로 안정적인 값을 전달합니다.
+## 2-2. SlowFast
 
-## train.py
+<aside>
 
-재현성을 위해 시드를 고정하고, Dataset에 경로, train/val, 프레임 수를 설정하고 이를 DataLoader에 넘겨줘서 효율적인 학습을 준비합니다.
+시간축을 Conv1d를 통해서 프레임을 T/2과 T/4로 압축한 뒤, T/2는 Fast에 넣고 T/4는 Slow에 넣는다. Slow와 Fast로 나눈 이유는 짧은 간격과 넓은 간격의 프레임을 다르게 처리해서 미세한 행동과 거친 행동을 다른 스트림으로 처리해서 파악하도록 하기 위함이다.
 
-그리고 Shift-GCN + ST-Transformer 블록을 선언하고, 손실 함수를 CrossEntropy로 정의하고, 최적화 함수를 AdamW로 정의합니다.
+2 프레임을 적은 은닉 차원 수로, 4프레임을 많은 은닉 차원 수로 통과하게 한 이유는 정보의 연산량 때문이다. 2프레임씩 보는 경로는 연산량이 많아서 은닉 차원 수를 높이면 연산량이 빠르게 증가한다. 하지만 4프레임씩 보는 경로는 연산량이 적어서 은닉 차원 수를 높여도 연산량이 빠르게 증가하지 않는다.
 
-이전에 만든 체크포인트가 존재한다면 불러옵니다. 그리고 1 epoch 동안 학습/검증을 수행하고 학습 스케줄러를 업데이트 합니다. 이 때 최고 검증 정확도를 달성하면 저장합니다. 그리고 일정 에폭마다 스냅샷을 저장하여 스냅샷 앙상블을 수행합니다.
+Slow 스트림의 Transformer가 층을 깊게 쌓을 수록 차원을 확장하도록 설계한 이유는 기존의 딥러닝 모델들이 깊은 층으로 갈 수록 채널 수를 늘려서 추상적이고 복잡한 의미를 담기 때문이다.
 
-## 실험 1
+</aside>
 
-아래와 같이 config.py를 설정했습니다.
+## 2-3. Spatial Temporal Transformer
 
-```
-# No nomalize by bone length in preprocess_ntu_data.py
-# python train.py --scheduler cosine_decay
+<aside>
 
-# >> 재현성을 위해 시드 설정
-SEED = 42
+Attnetion 연산을 수행하기 전에 데이터를 목표하는 차원으로 미리 변환한다. 차원이 다른 상태의 잔차연결은 Linear 레이어를 통해 목표하는 차원 크기로 변해준 뒤 잔차연결을 수행한다.
 
-# >> 데이터 로더 설정
-MAX_FRAMES = 150  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
-BATCH_SIZE = 32   # 배치 크기
-NUM_WORKERS = 6   # 데이터를 불러올 때 사용할 CPU 프로세서 수
-PIN_MEMORY = True # GPU 사용 시 데이터 전송 속도를 높이기 위한 설정
+입력 데이터를 초기 임베딩을 통해 64차원으로 만든다. 그리고 첫 번째 Slow ST Transformer 블록 내부에서 Linear Layer를 통해 128차원으로 확장된다. 그리고 여기서 Positional Encoding이 더해지고 Attention을 수행한다. 그리고 64차원의 입력이 Linear Layer를 통해 128차원으로 변환되고 잔차연결이 된다. 그 다음에 128차원을 출력한다.
 
-# >> 모델 하이퍼파라미터
-NUM_JOINTS = 50   # 관절 수
-NUM_COORDS = 7    # 거리1 + 방향3 + 가속도3
-NUM_CLASSES = 60  # 행동 클래스 수 (NTU RGB+D 60)
-PROB = 0.5 # 데이터 증강 확률
+두 번째 Slow ST Transformer 블록 내부에서 Linear Layer를 통해 128차원이 256차원으로 확장되고 Attention을 수행한다. 그리고 128차원의 입력이 Linear Layer를 통해 256차원으로 변환되고 잔차연결이 된다. 그 다음에 256차원을 출력한다.
 
-# >> 학습 하이퍼파라미터
-EPOCHS = 100             # 총 학습 에폭
-LEARNING_RATE = 0.0003   # 학습률
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
-WARMUP_EPOCHS = 3        # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수
-GRAD_CLIP_NORM = 0.7     # 그레이디언트 폭발을 막기 위한 클리핑 최대 L2 Norm 값
-ADAMW_WEIGHT_DECAY = 0.1 # AdamW weight decay , L2 정규화의 강도 설정
-PATIENCE = 10 # 조기종료 변수
-LABEL_SMOOTHING = 0.1 # Loss Function CrossEntropy의 label smoothing
-DROPOUT = 0.5 # dropout
-
-
-# >> block_type, layer_dims, use_gcn를 설정한다.
-# >> block_type='st' : Shift-GCN + ST-Transformer, block_type='standard' : Shift-GCN + Transformer
-# >> gcn 사용 여부는 use_gcn을 True, False로 지정한다.
-# >> layer_dims 사용법은, [입력 크기, 출력 크기]이다. 만약 4층을 쌓으려면 [64, 128, 128, 256, 256] 하면 된다.
-BLOCK_TYPE = 'st'
-LAYER_DIMS = [64, 128]
-USE_GCN = True
+Fast와 Slow가 서로 정보 공유를 할 때 출력하는 시간 차원과 채널 차원 수가 달라서 형태를 맞춰줘야 한다. Fast에서 Slow로 정보를 공유할 때는 Conv2d를 사용해서 시간 차원을 절반으로 줄이고 채널을 늘린다. Slow에서 Fast로 정보를 공유할 때는 ConvTranspose2d를 사용해서 시간 차원을 2배로 늘리고 채널을 줄인다.
 
-```
+구체적으로, Fast 스트림의 입력은 (N, 64, T, V)이고, Slow 스트림의 입력은 (N, 64, T/2 V)이다. 첫 번째 Transformer 블록에 진입하기 전에 정보 공유가 한 번 진행된다. 두 번째 Transformer 블록에 입력되는 모양은 Fast 스트림의 경우 (N, 64, T, V)이고 Slow 스트림의 경우 (N, 128, T/2 V)이다. 두 번째 Transformer 블록에 진입하기 전에 정보 공유가 한 번 더 진행된다.
 
-24 epoch에서 학습률 0.00027 -> 0.00002
+모델은 공통 특징 추출기와 2개의 Head로 나뉘게 된다.
 
-### 결과1
+</aside>
 
-![Study1](image/Study1.png)
+## 2-4. GRL(Gradient Reversal Layer)
 
-Test Acc: 64.7%
+<aside>
 
-## 실험2
+2개의 Head로 나뉘게 되는데, 하나의 head는 Action Classifier이고 다른 하나의 Head는 Domain Classifier이다. GRL는 순전파에서 두 헤드 모두 아무런 동작을 하지 않는다. 하지만 역전파 시에 Domain Classifier만의 그레이디언트 부호를 반대로 뒤집는다. 
 
-```
-# >> 재현성을 위해 시드 설정
-SEED = 42
+</aside>
 
-# >> 데이터 로더 설정
-MAX_FRAMES = 150  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
-BATCH_SIZE = 32   # 배치 크기
-NUM_WORKERS = 6   # 데이터를 불러올 때 사용할 CPU 프로세서 수
-PIN_MEMORY = True # GPU 사용 시 데이터 전송 속도를 높이기 위한 설정
+## 2-5. Attentive Pooling
 
-# >> 모델 하이퍼파라미터
-NUM_JOINTS = 50   # 관절 수
-NUM_COORDS = 7    # 거리1 + 방향3 + 가속도3
-NUM_CLASSES = 60  # 행동 클래스 수 (NTU RGB+D 60)
-PROB = 0.5 # 데이터 증강 확률
+<aside>
 
-# >> 학습 하이퍼파라미터
-EPOCHS = 100             # 총 학습 에폭
-LEARNING_RATE = 0.0003   # 학습률
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
-WARMUP_EPOCHS = 3        # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수
-GRAD_CLIP_NORM = 0.7     # 그레이디언트 폭발을 막기 위한 클리핑 최대 L2 Norm 값
-ADAMW_WEIGHT_DECAY = 0.1 # AdamW weight decay , L2 정규화의 강도 설정
-PATIENCE = 10 # 조기종료 변수
-LABEL_SMOOTHING = 0.1 # Loss Function CrossEntropy의 label smoothing
-DROPOUT = 0.5 # dropout
-
-
-# >> block_type, layer_dims, use_gcn를 설정한다.
-# >> block_type='st' : Shift-GCN + ST-Transformer, block_type='standard' : Shift-GCN + Transformer
-# >> gcn 사용 여부는 use_gcn을 True, False로 지정한다.
-# >> layer_dims 사용법은, [입력 크기, 출력 크기]이다. 만약 4층을 쌓으려면 [64, 128, 128, 256, 256] 하면 된다.
-BLOCK_TYPE = 'st'
-LAYER_DIMS = [64, 128, 256]
-USE_GCN = True
-```
+Attentive Pooling은 중요한 정보에 가중치를 두고 합산하는 방식이다.
 
-### 결과2
+$e_i = \mathbf{w}^\top x_i + b$
 
-![Study2](image/Study2.png)
+위 수식을 통해  각 시공간 토큰 x가 최종 분류에 얼마나 기여하는지 판단하는 점수e를 계산한다.
 
-75.76%
+$\alpha_i = \text{Softmax}(e_i) = \frac{\exp(e_i)}{\sum_{k=1}^{L} \exp(e_k)}$
 
-## 실험3
+Softmax를 사용해서 점수의 분포를 0 ~ 1 사이로 변환한다. 그러면 가중치 $a_i$가 나오게 된다.
 
-```
-# >> 재현성을 위해 시드 설정
-SEED = 42
+$v = \sum_{i=1}^{L} \alpha_i x_i$
 
-# >> 데이터 로더 설정
-MAX_FRAMES = 150  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
-BATCH_SIZE = 32   # 배치 크기
-NUM_WORKERS = 6   # 데이터를 불러올 때 사용할 CPU 프로세서 수
-PIN_MEMORY = True # GPU 사용 시 데이터 전송 속도를 높이기 위한 설정
+이제 각 입력 x에 가중치 $a_i$를 곱한 뒤 합산해서 최종 출력 벡터를 만든다.
 
-# >> 모델 하이퍼파라미터
-NUM_JOINTS = 50   # 관절 수
-NUM_COORDS = 7    # 거리1 + 방향3 + 가속도3
-NUM_CLASSES = 60  # 행동 클래스 수 (NTU RGB+D 60)
-PROB = 0.5 # 데이터 증강 확률
+</aside>
 
-# >> 학습 하이퍼파라미터
-EPOCHS = 100             # 총 학습 에폭
-LEARNING_RATE = 0.0003   # 학습률 22epoch에서 0.00003으로 수정.
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
-WARMUP_EPOCHS = 3        # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수
-GRAD_CLIP_NORM = 0.7     # 그레이디언트 폭발을 막기 위한 클리핑 최대 L2 Norm 값
-ADAMW_WEIGHT_DECAY = 0.1 # AdamW weight decay , L2 정규화의 강도 설정
-PATIENCE = 10 # 조기종료 변수
-LABEL_SMOOTHING = 0.1 # Loss Function CrossEntropy의 label smoothing
-DROPOUT = 0.5 # dropout
+## 2-6. RMSNorm
 
+<aside>
 
-# >> block_type, layer_dims, use_gcn를 설정한다.
-# >> block_type='st' : Shift-GCN + ST-Transformer, block_type='standard' : Shift-GCN + Transformer
-# >> gcn 사용 여부는 use_gcn을 True, False로 지정한다.
-# >> layer_dims 사용법은, [입력 크기, 출력 크기]이다. 만약 4층을 쌓으려면 [64, 128, 128, 256, 256] 하면 된다.
-BLOCK_TYPE = 'st'
-LAYER_DIMS = [64, 128, 128, 256]
-USE_GCN = True
-```
+RMSNorm은 평균을 빼는 연산을 생략한다. Transformer 구조에서 평균을 계산하고 빼는 연산은 성능 향상에 기여하지 못하고 연산량만 차지하기 때문이다. 
 
-### 결과3
+$\text{RMS}(x) = \sqrt{\frac{1}{d} \sum_{i=1}^{d} x_i^2 + \epsilon}$
 
-![Study3](image/Study3.png)
+이 수식은 입력 벡터를 제곱해서 평균을 낸 뒤 다시 제곱근을 한다. 이를 통해 벡터가 원점으로부터 얼마나 멀리 떨어져 있는지 측정한다.
 
-77.16%
+그리고 입력 벡터를 RMS 값으로 나누어 정규화를 수행한다.
 
-## 실험 4
+$\bar{x}_i = \frac{x_i}{\text{RMS}(x)}$
 
-칼만 필터를 사용하여 노이즈를 제거하고, 특정 프레임에서 데이터가 0으로 들어오면 이 값을 무시하고 위치를 보관하고자 합니다.
+그리고 정규화된 값에 학습 가능한 파라미터를 곱해서 최종 출력을 낸다. 이를 통해 정규화로 인해 사라진 특징 사이의 중요도 차이를 다시 강조한다.
 
-하지만 칼만 필터를 사용하니까 테스트 정확도가 잘 안오르는 모양이 보입니다.
+$y_i = \bar{x}_i \cdot g_i$
 
-```
-# >> 재현성을 위해 시드 설정
-SEED = 42
+</aside>
 
-# >> 데이터 로더 설정
-MAX_FRAMES = 150  # 시퀀스의 최대 길이 (패딩 또는 절단 기준)
-BATCH_SIZE = 32   # 배치 크기
-NUM_WORKERS = 6   # 데이터를 불러올 때 사용할 CPU 프로세서 수 
-PIN_MEMORY = True # GPU 사용 시 데이터 전송 속도를 높이기 위한 설정
+---
 
-# >> 모델 하이퍼파라미터
-NUM_JOINTS = 50   # 관절 수
-NUM_COORDS = 7    # 거리1 + 방향3 + 가속도3
-NUM_CLASSES = 60  # 행동 클래스 수 (NTU RGB+D 60)
-PROB = 0.5 # 데이터 증강 확률
+# 3. 실험 결과
 
-# >> 학습 하이퍼파라미터
-EPOCHS = 100             # 총 학습 에폭
-LEARNING_RATE = 0.000001   # 학습률 case3 -> 0.0003 에서 0.00001 (22epoch) -> 0.000001 (24epoch)
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu' # 학습 장치
-WARMUP_EPOCHS = 3        # 학습 초기에 학습률을 서서히 증가시키는 웜업 에폭 수 
-GRAD_CLIP_NORM = 0.7     # 그레이디언트 폭발을 막기 위한 클리핑 최대 L2 Norm 값 
-ADAMW_WEIGHT_DECAY = 0.1 # AdamW weight decay , L2 정규화의 강도 설정
-PATIENCE = 10 # 조기종료 변수
-LABEL_SMOOTHING = 0.1 # Loss Function CrossEntropy의 label smoothing
-DROPOUT = 0.5 # dropout
+---
 
+<aside>
 
-# >> block_type, layer_dims, use_gcn를 설정한다.
-# >> block_type='st' : Shift-GCN + ST-Transformer, block_type='standard' : Shift-GCN + Transformer
-# >> gcn 사용 여부는 use_gcn을 True, False로 지정한다.
-# >> layer_dims 사용법은, [입력 크기, 출력 크기]이다. 만약 4층을 쌓으려면 [64, 128, 128, 256, 256] 하면 된다.
-BLOCK_TYPE = 'st'
-LAYER_DIMS = [64, 128, 128, 256]
-USE_GCN = True
-```
+실험에서 사용한 데이터셋은 NTU RGB+D 60 데이터셋을 사용했다. NTU RGB+D 120 데이터셋을 사용하지 않은 이유는 현재 소유한 GPU에서는 120개의 클래스를 구분할 수 있는 모델을 구축하기 어렵다고 판단했기 때문이다.
 
-### 결과 4
+40 epoch로 학습을 마무리했으며 이 중 초반의 7 epoch는 Warmup 기법을 사용해 학습률을 천천히 증가시켰다. 학습 스케줄러는 Cosine Decay를 사용했다. 이를 통해 40 Epoch까지 학습률을 천천히 낮추면서 학습을 진행했다.
 
-![Study4](image/Study4.png)
+GRL의 Alpha 값도 Warmup 기간인 7 Epoch까지는 0으로 설정해 비활성화를 했고, 그 뒤부터 점진적으로 설정된 alpha 값까지 증가시켰다. 왜냐하면 학습 초기 특징 추출기의 불안정성을 방지하기 위함이다.
 
-71.81%
+하이퍼 파라미터 튜닝은 Optuna를 통해 수행했으며, Optuna를 사용해 30 Trial까지 수행했다.
 
-## 실험 5
+Optimizer는 AdamW를 사용했고 이 때의 weight Decay는 0.0023을 사용했다. Learning Rate는 0.00456이다. dropout은 0.45, GRL Alpha는 0.2, 증강 확률은 80%, Lable Smoothing은 0.114이다. 배치 사이즈는 128로 설정했다.
 
-이번에는 모델의 구조를 [256, 128, 128, 64]로 하고자 합니다. 이 때 칼만 필터는 사용하지 않고 실험3의 코드를 수정하여 사용합니다.
+</aside>
 
-즉, 실험 3에서 구조를 각 레이어의 입력과 출력 크기를 반대로 뒤집은 것과 같습니다.
+<aside>
 
-### 결과 5
+이 모델의 연산량은 다음과 같다. 파라미터 수는 1.89M이고, FLOPs는 3.28G이고, FPS: 200 frames/sec이다.
 
-70% 근처까지는 실험 3보다 빠르게 도달했으나, 해당 구간에서 학습률을 1/10으로 2번 낮췄음에도 정확도가 정체되었습니다.
+다른 모델과 비교했을 때, 아래 표와 같다.
 
-따라서 각 층의 차원 크기가 점점 작아지는 구조는 적합하지 않습니다.
+</aside>
 
-![Study5](image/Study5.png)
+| 모델 이름 | 정확도 (Xview) $\mathbb{E}_1$ | 정확도 (Xsub) $\mathbb{E}_1$ | 파라미터 수 | 연산량 |
+| --- | --- | --- | --- | --- |
+| Ours | 91.19% | 85.54% | 1.89M | 3.28G |
+| Skateformer | 97% | 92.6% | 2.03M | 3.62G |
+| HD-GCN | 95.7% | 90.6% | 1.66M | 3.44G |
+| FR-Head(GCN) | 95.3% | 90.3% | 1.45M | 3.60G |
 
-70.94%
+<aside>
 
-## 실험 6
+Xview: 0.9119
 
-실험 3에서 첫 프레임의 좌표값을 제공하는 것을 제거해봤습니다.
+![training_history.png](training_history.png)
 
-그리고 이번에는 Validation Acc가 2번 연속으로 갱신되지 않으면 Learning Rate를 1/10으로 줄이고, 이 과정이 2번 반복된 뒤 또 다시 2번 연속으로 Acc가 갱신되지 않으면 학습을 종료하도록 했습니다.
+</aside>
 
-### 결과 6
+<aside>
 
-시작 위치 좌표값을 제거했더니 정확도가 약 0.62%p 하락했습니다. 첫 프레임을 사용하지 않는 것이 나중에 실시간 영상에서 행동을 인식할 때 쉽게 적용시킬 수 있어서, 첫 프레임을 사용하지 않는 것이 나을 것 같습니다. 
+Xsub: 0.8554
 
-![Study6](image/Study6.png)
+![training_history.png](training_history%201.png)
 
-76.54%
+</aside>
 
-## 실험 7
+---
 
-이번에는 실험 6에서 모델의 층 깊이를 늘리고 마지막 레이어의 노드 수를 256에서 128로 줄였습니다.
+# 4. 결론
 
-지금 소유한 GPU로는 층의 깊이를 늘리면서 마지막 층의 노드 수를 유지할 수 없었기 때문입니다.
+<aside>
 
-[64, 128, 128, 128, 128, 128]
+이 연구에서는 SlowFast Spatial-Temporal Transformer를 제안하여 Skeleton-based Action Recognition에서의 효율적인 연산 구조를 탐구하였다. 
 
-즉, 모델의 표현력이 부족한지 아닌지 확인하고자 합니다.
+기존의 원시 좌표를 그대로 사용하는 대신, 척추 길이를 기준으로 정규화된 12채널의 물리학적 특징 벡터(Bone, Velocity, Relative Center, Relative To Other Vector)를 입력으로 사용함으로써 얕은 모델에서 모델의 학습 효율을 극대화하였다.
 
-### 결과 7
+제안된 네트워크는 시간적 해상도와 채널 용량을 비대칭적으로 설계한 Fast Stream과 Slow Stream으로 구성되었다. 시간 해상도가 높은 경로는 채널 용량을 낮게 잡아서 연산량 증가를 억제하고, 시간 해상도가 낮은 경로는 채널 용량을 높게 잡았다.
 
-모델의 크기가 증가한 만큼, 학습 시간도 오래 걸리고 1 epoch를 수행하는 데 걸리는 시간도 증가했습니다.
+실험 결과, 제안 모델은 물리적 사전 지식을 반영한 입력 데이터 정규화와 이원화된 스트림 구조를 통해 학습 수렴 속도를 높이고 실시간성(200 FPS)을 확보하는 데 성공하였다. 그러나 기존 SOTA 모델과의 비교 분석을 통해 다음과 같은 명확한 한계점과 연구 과제를 도출하였다.
 
-epoch도 평소의 2배에 가깝게 수행되었지만, 정확도는 -12.8%p 감소했습니다.
+제안 모델은 SkateFormer 대비 파라미터 수를 약 7%(2.03M → 1.89M), 연산량을 약 9%(3.62G → 3.28G) 낮았다. 그러나 정확도(X-View 기준)는 97%에서 91.19%로 약 5.81%p 낮았다. 이는 정확도 손실에 비해 연산량과 파라미터가 크게 낮아지지 않음을 보여준다.
 
-층의 깊이 보다는 한 층의 노드 수가 256인 것이 모델의 성능에 더 큰 영향을 준 것 같다고 판단했습니다.
+이 모델은 Two Stream을 통해 모델이 보는 시간축을 다르게 해서 행동 인식 정확도를 향상시키고자 했으나 높은 정확도를 달성하지 못했다.
 
-배치 사이즈를 그대로 유지했기 때문에 이 부분이 성능에 영향을 줄 수도 있습니다. 따라서 동일한 조건에서 배치 사이즈를 32에서 16 또는 24로 줄이고 다시 학습시켜봐야 합니다.
+</aside>
 
-![Study7](image/Study7.png)
+# 참고한 논문
 
-64.94%
+SlowFast Networks for Video Recognition
 
-## 실험 8
+Unsupervised Domain Adaptation by Backpropagation
 
-이번에는 실험 6에서 Dropout 비율을 0.5 -> 0.2 로 낮추고, GRAD_CLIP_NORM 값을 0.7 -> 1.0으로 높였습니다. 그리고 WARMUP 기간을 3 -> 10epoch로 늘렸습니다.
+Skeleton-based Action Recognition Via Spatial and Temporal Transformer Networks
 
-### 결과 8
-
-![Study8](image/Study8.png)
-
-79.21%의 정확도를 달성했습니다. 높은 Dropout 비율이 학습을 방해한다는 것을 확인했습니다.
-
-## 실험 9
-
-이번에는 실험 8에서 한 층의 노드 수가 256이 되면 어떻게 될지 실험하고자 합니다.
-
-입력 데이터 차원이 미리 정제된 속도(3) + 가속도(3) + 이동거리(1) = 7 차원이기 때문에 층의 깊이를 늘리는 것은 적합하지 않다고 생각합니다. 이에 층의 깊이를 유지하되 한 층의 노드 수를 [64, 128, 128, 256]에서 [128, 256, 256, 256]으로 충분히 늘려보았습니다.
-
-그리고 이에 대해 메모리 부족으로 배치 사이즈를 32에서 24로 낮추고, 입력 데이터가 원래 2프레임 당 하나로 추출되었다면, 4프레임 당 하나로 추출했습니다.
-
-### 결과 9
-
-프레임을 2프레임 간격이 아니라 4프레임 간격으로 해서 성능 저하가 발생했을 수도 있고, 배치 사이즈를 다르게 해서 성능 저하가 발생했을 수도 있습니다.
-
-![Study9](image/Study9.png)
-
-73.65%
-
-## 실험 10
-
-이번에는 2프레임 간격에서 모델을 [128, 128, 256, 256]으로 노드 수를 늘려봤습니다. 실험 8의 설정에서 노드 수만 늘리면 메모리가 오버되기 때문에 배치 사이즈를 32에서 24로 낮추었습니다.
-
-### 결과 10
-
-![Study10](image/Study10.png)
-
-78.93%
-
-## 실험 11
-
-이번에는 입력 특징을 추가로 사용했습니다. 가속도, 이동 거리, 이동 방향 만으로는 어려운 동작을 학습하기 어렵다고 판단했습니다. 그리고 가속도 계산 시 노이즈가 발생할 가능성이 크다는 것을 알게됐습니다.
-
-그래서 입력 특징을 다음과 같이 수정했습니다.
-
-이동 거리(1), 이동 방향(3), 정규화된 뼈 길이(1), 관절 각도(1), 몸통 Y축 기준 팔다리 각도(1), 몸통 Z축 기준 팔다리 각도(1), 신체 내 양손간 양발간 거리(1), 신체 내 오른손발, 왼손발 간 거리(1), 사람 간 중심 거리(1), 사람간 오른손/왼손/오른발/왼발 거리(4)
-
-서로 다른 사람들 사이의 상호작용 데이터 특징과 신체 내의 행동을 더 잘 판단할 수 있는 각도 특징을 추가했습니다.
-
-그리고 모델의 구조를 전면적으로 수정했습니다.
-
-SlowFast Video Recognition 논문에서 나온 아이디어인 SlowFast 구조를 채택했습니다.
-
-두 스트림 사이의 융합은 1회로 설정했으며, Fast(2프레임 간격으로 추출된) 스트림은 [32, 32, 64] 의 가벼운 구조를, Slow(4프레임 간격으로 추출된) 스트림은 [128, 128, 256]의 무거운 구조를 사용했습니다.
-
-### 결과 11
-
-![Study11](stream_image/Study11.png)
-
-80.78%
-
-## 실험 12
-
-이번에는 SlowFast_ViT 논문에서 나온 중요한 부분과 덜 중요한 부분을 구분해서 학습하는 아이디어를 Spatial Transformer Encoder에 추가했습니다.
-
-### 결과 12
-
-1 epoch당 훈련 속도는 약 13초 절약했으며, 검증 정확도는 약 0.62%p 하락했습니다.
-
-![Study12](stream_image/Study12.png)
-
-80.16%
-
-## 실험 13
-
-이제 실험 12에서의 결과를 가지고 과적합을 방지하는 전략을 사용하고자 합니다.
-
-우선 데이터 증강이 과적합 방지에 효과적인지 확인하기 위해 기존에 20% 확률로 증강했던 것을 40% 확률로 증강하는 것으로 변경했습니다.
-
-```
-ADAMW_WEIGHT_DECAY 0.01 -> 0.05
-DROPOUT 0.2 -> 0.4
-angle = np.random.uniform(-10, 10) * np.pi / 180.0 -> np.random.uniform(-15, 15) * np.pi / 180.0
-scale_factor = np.random.uniform(0.9, 1.1) -> np.random.uniform(0.8, 1.2)
-num_joints_to_mask = np.random.randint(1, 4) -> np.random.randint(2, 6)
-```
-
-### 결과 13
-
-![Study13](stream_image/Study13.png)
-
-81.29%
-
-## 실험 14
-실험 13에서 각 스트림의 최종 출력을 concatenate 하는 대신, 앙상블처럼 독립적으로 판단하도록 변경했습니다.
-
-그리고 적대적 학습을 도입하여 모델이 행동을 학습하도록 하고 사람을 학습하지 못하게 했습니다.
-```
-PROB = 0.6
-SPATIAL_KEEP_RATE = 0.7
-ADAMW_WEIGHT_DECAY = 0.05
-LABEL_SMOOTHING = 0.05
-DROPOUT = 0.3
-```
-
-### 결과 14
-
-![Study14](stream_image/Study14.png)
-
-82.12%
-
+SkateFormer: Skeletal-Temporal Transformer for Human Action Recognition
