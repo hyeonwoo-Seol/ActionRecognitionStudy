@@ -1,12 +1,6 @@
 # SlowFast Spatial-Temporal Transformer 보고서
 
-# 제목: SlowFast Spatial-Temporal_Transformer
-
----
-
-# 0. 요약
-
-## Two Stream Spatial-Temporal Transformer 연구
+# 0. 요약:  Two Stream Spatial-Temporal Transformer 연구
 
 ## 0-1. 연구 목적
 
@@ -186,8 +180,6 @@ $y_i = \bar{x}_i \cdot g_i$
 ---
 
 # 3. 실험 결과
-
----
 
 <aside>
 
