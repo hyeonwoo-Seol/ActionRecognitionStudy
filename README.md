@@ -1,6 +1,6 @@
 # SlowFast Spatial-Temporal Transformer 보고서
 
-# 0. 요약:  Two Stream Spatial-Temporal Transformer 연구
+# 0. 요약:  성능 향상을 위한 Two Stream Spatial-Temporal Transformer 연구
 
 ## 0-1. 연구 목적
 
