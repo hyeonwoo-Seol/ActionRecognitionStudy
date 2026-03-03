@@ -86,7 +86,7 @@ def plot_history(history, save_path):
 def train_one_epoch(model, loader, criterion_action, criterion_aux, optimizer, device, scaler, epoch):
     model.train()
     
-    # Optimizer에서 현재 LR 가져오기 (Scheduler에 의해 동적으로 변경된 실제 값)
+    # Optimizer에서 현재 LR 가져오기
     current_lr = optimizer.param_groups[0]['lr']
     current_alpha = get_current_alpha(epoch, max_alpha=config.ADVERSARIAL_ALPHA)
     
@@ -98,8 +98,7 @@ def train_one_epoch(model, loader, criterion_action, criterion_aux, optimizer, d
     correct_aux = 0
     total_samples = 0
 
-    # 진행률 표시줄에 현재 LR과 Alpha 표시 (소수점 6자리 고정 표기법 사용)
-    # 예: LR=0.000100 | α=0.000
+    # 진행률 표시줄에 현재 LR과 Alpha 표시
     desc_str = f"[Train Ep {epoch+1}/{MAX_EPOCHS_PER_TRIAL}] LR={current_lr:.6f} | α={current_alpha:.3f}"
     train_bar = tqdm(loader, desc=desc_str, colour="green", leave=False)
     
@@ -213,7 +212,7 @@ def run_trial(args):
             worker_init_fn=seed_worker, generator=g
         )
 
-        # [중요] Protocol에 따른 Aux Class 개수 설정
+        # Protocol에 따른 Aux Class 개수 설정
         if args.protocol == 'xsub':
             num_aux_classes = config.NUM_SUBJECTS
             print(f" >> GRL Target: Subject Classification ({num_aux_classes} classes)")
@@ -225,7 +224,7 @@ def run_trial(args):
             num_joints=config.NUM_JOINTS,
             num_coords=config.NUM_COORDS,
             num_classes=config.NUM_CLASSES,
-            num_aux_classes=num_aux_classes, # [설정] 동적 전달
+            num_aux_classes=num_aux_classes,
             alpha=0.0 
         ).to(device)
 
@@ -260,8 +259,6 @@ def run_trial(args):
         for epoch in range(start_epoch, MAX_EPOCHS_PER_TRIAL):
             epoch_start_time = time.time()
             
-            # [수정] 이번 Epoch에 사용할 LR과 Alpha를 미리 캡처 (로그 출력용)
-            # scheduler.step() 전에 가져와야 '이번에 사용한' LR을 알 수 있습니다.
             current_lr_for_log = optimizer.param_groups[0]['lr']
             current_alpha_for_log = get_current_alpha(epoch, max_alpha=config.ADVERSARIAL_ALPHA)
             
@@ -278,11 +275,10 @@ def run_trial(args):
             history['val_loss'].append(val_loss)
             history['val_acc'].append(val_acc_action)
             
-            # Epoch 종료 후 스케줄러 업데이트 (다음 Epoch LR 변경)
+            # Epoch 종료 후 스케줄러 업데이트
             scheduler.step()
             epoch_time = time.time() - epoch_start_time
             
-            # [수정] 위에서 캡처한 LR 값으로 로그 출력 (소수점 6자리 고정)
             print(f"\nEpoch [{epoch+1}/{MAX_EPOCHS_PER_TRIAL}] | Time: {epoch_time:.1f}s | LR: {current_lr_for_log:.6f} | Alpha: {current_alpha_for_log:.4f}")
             print(f" >> [ACT] Train: {train_acc_action:.4f} | Val: {val_acc_action:.4f}")
             print(f" >> [AUX] Train: {train_acc_aux:.4f} (GRL Target)")
