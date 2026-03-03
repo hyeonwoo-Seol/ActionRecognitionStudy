@@ -8,10 +8,6 @@
 # 2. 척추 길이 정규화 (Normalization) 복구
 # 3. log1p 제거 (물리적 선형성 유지)
 # ##----------------------------------------------------------------------------
-# [수정 사항 2025-12-07]
-# - ntu_data_loader_1 방식을 적용하여 Resize(Interpolation) 로직 추가.
-# - 단순 프레임 자르기(Cropping) 대신 전체 동작을 보존하며 리사이징 수행.
-# ##----------------------------------------------------------------------------
 
 import os
 import numpy as np
@@ -60,7 +56,7 @@ def _read_skeleton_file(filepath):
     if num_frames == 0:
         return np.zeros((0, 2, BASE_NUM_JOINTS, 3))
 
-    # --- 1차 스캔: 메인 Actor 2명 찾기 (투표) ---
+    # --- 1차 스캔: 메인 Actor 2명 찾기 ---
     body_id_counts = {}
     try:
         with open(filepath, 'r') as f:
